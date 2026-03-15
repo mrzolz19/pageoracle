@@ -392,7 +392,6 @@ class PageOracleBackend:
 if __name__ == "__main__":
     backend = PageOracleBackend()
     backend.initialize()
-    #sk-abddc323cae64b709fd4021c8cca9d67
     print("\nКоманды:")
     print("  /add <путь>    — добавить книгу в базу без пересборки индекса")
     print("  /цитата <текст> — точный поиск цитат (без анализа, только фрагменты)")
