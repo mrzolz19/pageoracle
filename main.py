@@ -1,27 +1,23 @@
-# TODO: Добавить больше провайдеров и обновить их 
-# TODO: Подправить системные промты (а именно роль), чтобы он лучше понимал контекст нехудожественной литературы
-# TODO: Добавить учёт и очистку истории
-
 import re
+import json
 import shutil
 import importlib
 from pathlib import Path
+from datetime import datetime
+from typing import Any
+from typing import TypedDict, Literal, cast
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 import os
-#from dotenv import load_dotenv
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.embeddings import Embeddings
 from langchain_community.vectorstores import Chroma
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough, RunnableLambda
-#from langsmith import traceable
-
-#load_dotenv()  # Загружаем переменные окружения из .env
-
-os.environ['NO_PROXY'] = '127.0.0.1,localhost'
+from langchain_core.runnables import RunnableLambda
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langgraph.graph import END, START, StateGraph
 
 # ───────────────────── провайдеры LLM (для GUI настроек) ─────────────
 PROVIDERS = {
@@ -35,7 +31,12 @@ PROVIDERS = {
         "class": "ChatOpenAI",
         "package": "langchain_openai",
         "env_key": "OPENAI_API_KEY",
-        "models": ["gpt-5.4-pro-2026-03-05", "gpt-5.4-2026-03-05", "gpt-5-mini-2025-08-07", "gpt-5-nano-2025-08-07"],
+        "models": [
+            "gpt-5.4-pro-2026-03-05",
+            "gpt-5.4-2026-03-05",
+            "gpt-5-mini-2025-08-07",
+            "gpt-5-nano-2025-08-07",
+        ],
     },
     "Anthropic": {
         "class": "ChatAnthropic",
@@ -47,7 +48,11 @@ PROVIDERS = {
         "class": "ChatGoogleGenerativeAI",
         "package": "langchain_google_genai",
         "env_key": "GOOGLE_API_KEY",
-        "models": ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview"],
+        "models": [
+            "gemini-3.1-pro-preview",
+            "gemini-3-flash-preview",
+            "gemini-3.1-flash-lite-preview",
+        ],
     },
     "Mistral": {
         "class": "ChatMistralAI",
@@ -65,43 +70,67 @@ PROVIDERS = {
 
 # ───────────────────────── парсинг структуры книги ───────────────────
 _ORDINAL_MAP = {
-    "ПЕРВАЯ": "1", "ВТОРАЯ": "2", "ТРЕТЬЯ": "3",
-    "ЧЕТВЁРТАЯ": "4", "ЧЕТВЕРТАЯ": "4",
-    "ПЯТАЯ": "5", "ШЕСТАЯ": "6", "СЕДЬМАЯ": "7", "ВОСЬМАЯ": "8",
+    "ПЕРВАЯ": "1",
+    "ВТОРАЯ": "2",
+    "ТРЕТЬЯ": "3",
+    "ЧЕТВЁРТАЯ": "4",
+    "ЧЕТВЕРТАЯ": "4",
+    "ПЯТАЯ": "5",
+    "ШЕСТАЯ": "6",
+    "СЕДЬМАЯ": "7",
+    "ВОСЬМАЯ": "8",
 }
 _ROMAN_MAP = {
-    "I": 1, "II": 2, "III": 3, "IV": 4, "V": 5,
-    "VI": 6, "VII": 7, "VIII": 8, "IX": 9, "X": 10,
-    "XI": 11, "XII": 12, "XIII": 13, "XIV": 14, "XV": 15,
-    "XVI": 16, "XVII": 17, "XVIII": 18, "XIX": 19, "XX": 20,
+    "I": 1,
+    "II": 2,
+    "III": 3,
+    "IV": 4,
+    "V": 5,
+    "VI": 6,
+    "VII": 7,
+    "VIII": 8,
+    "IX": 9,
+    "X": 10,
+    "XI": 11,
+    "XII": 12,
+    "XIII": 13,
+    "XIV": 14,
+    "XV": 15,
+    "XVI": 16,
+    "XVII": 17,
+    "XVIII": 18,
+    "XIX": 19,
+    "XX": 20,
 }
 
-_PART_RE     = re.compile(r'^\s*ЧАСТЬ\s+(\w+)\s*$', re.IGNORECASE)
-_CHAPTER_RE  = re.compile(r'^\s*(?:Глава|ГЛАВА)\s+([IVXLCDM]+|\d+)\s*$')
-_ROMAN_RE    = re.compile(r'^\s*([IVXLCDM]{1,7})\.?\s*$')
-_EPILOGUE_RE = re.compile(r'^\s*ЭПИЛОГ\s*$', re.IGNORECASE)
+_PART_RE = re.compile(r"^\s*ЧАСТЬ\s+(\w+)\s*$", re.IGNORECASE)
+_CHAPTER_RE = re.compile(r"^\s*(?:Глава|ГЛАВА)\s+([IVXLCDM]+|\d+)\s*$")
+_ROMAN_RE = re.compile(r"^\s*([IVXLCDM]{1,7})\.?\s*$")
+_EPILOGUE_RE = re.compile(r"^\s*ЭПИЛОГ\s*$", re.IGNORECASE)
 
 
 def annotate_book(docs: list, book_title: str) -> list:
     result = []
     for doc in docs:
-        lines           = doc.page_content.split('\n')
-        current_part    = "Вступление"
+        lines = doc.page_content.split("\n")
+        current_part = "Вступление"
         current_chapter = "—"
         seg_lines: list = []
 
         def flush(part: str, chapter: str) -> None:
-            text = '\n'.join(seg_lines).strip()
+            text = "\n".join(seg_lines).strip()
             if text:
-                result.append(Document(
-                    page_content=text,
-                    metadata={
-                        "source":     doc.metadata.get("source", ""),
-                        "book_title": book_title,
-                        "part":       part,
-                        "chapter":    chapter,
-                    }
-                ))
+                result.append(
+                    Document(
+                        page_content=text,
+                        metadata={
+                            "source": doc.metadata.get("source", ""),
+                            "book_title": book_title,
+                            "part": part,
+                            "chapter": chapter,
+                        },
+                    )
+                )
             seg_lines.clear()
 
         for line in lines:
@@ -113,16 +142,22 @@ def annotate_book(docs: list, book_title: str) -> list:
             if pm or em:
                 flush(current_part, current_chapter)
                 if em:
-                    current_part    = "Эпилог"
+                    current_part = "Эпилог"
                     current_chapter = "—"
                 else:
-                    ordinal      = pm.group(1).upper()
+                    ordinal = pm.group(1).upper() if pm else ""
                     current_part = f"Часть {_ORDINAL_MAP.get(ordinal, ordinal)}"
                     current_chapter = "—"
                 seg_lines.append(line)
             elif cm or rm:
                 flush(current_part, current_chapter)
-                chap_str        = (cm.group(1) if cm else rm.group(1)).upper()
+                if cm:
+                    chap_raw = cm.group(1)
+                elif rm:
+                    chap_raw = rm.group(1)
+                else:
+                    chap_raw = ""
+                chap_str = chap_raw.upper()
                 current_chapter = f"Глава {_ROMAN_MAP.get(chap_str, chap_str)}"
                 seg_lines.append(line)
             else:
@@ -135,14 +170,20 @@ def annotate_book(docs: list, book_title: str) -> list:
 def format_docs(docs: list) -> str:
     parts = []
     for doc in docs:
-        m   = doc.metadata
-        ref = " | ".join(filter(None, [
-            m.get("book_title"),
-            m.get("part"),
-            m.get("chapter"),
-        ]))
+        m = doc.metadata
+        ref = " | ".join(
+            filter(
+                None,
+                [
+                    m.get("book_title"),
+                    m.get("part"),
+                    m.get("chapter"),
+                ],
+            )
+        )
         parts.append(f"[{ref}]\n{doc.page_content}")
     return "\n\n---\n\n".join(parts)
+
 
 def ensure_context(input_dict: dict) -> dict:
     """
@@ -157,60 +198,89 @@ def ensure_context(input_dict: dict) -> dict:
         )
     return input_dict
 
-# ─────────────────────────── промпты ─────────────────────────────────
-ANALYSIS_PROMPT = ChatPromptTemplate.from_messages([
-    (
-        "system",
-        "Ты литературовед и литературный критик. Отвечай СТРОГО НА РУССКОМ ЯЗЫКЕ.\n"
-        "Каждый фрагмент контекста помечен меткой вида [Название книги | Часть X | Глава Y]. "
-        "Используй эти метки как источник при цитировании.\n\n"
-        "Структура ответа — два блока:\n\n"
-        "Цитаты из текста\n"
-        "Приведи 2–5 прямых цитат, взятых ТОЛЬКО из предоставленного контекста. "
-        "Если цитат нету - так и напиши"
-        "После каждой цитаты укажи источник в скобках: "
-        "(«Название книги», Часть X, Глава Y).\n\n"
-        "Анализ\n"
-        "Краткий ответ на вопрос на основе приведённых цитат. "
-        "Не выходи за рамки контекста. "
-        "Если информации недостаточно — честно сообщи об этом."
-    ),
-    MessagesPlaceholder("history"),
-    (
-        "human",
-        "Контекст:\n{context}\n\nВопрос: {question}"
-    ),
-])
 
-QUOTE_PROMPT = ChatPromptTemplate.from_messages([
-    (
-        "system",
-        "Ты литературовед. Отвечай СТРОГО НА РУССКОМ ЯЗЫКЕ.\n"
-        "Каждый фрагмент контекста помечен меткой вида [Название книги | Часть X | Глава Y].\n\n"
-        "Твоя задача — найти и привести ТОЧНЫЕ цитаты из предоставленного контекста, "
-        "максимально близкие к запросу пользователя.\n\n"
-        "Формат ответа:\n"
-        "Для каждой найденной цитаты:\n"
-        "1. Приведи цитату дословно, заключив в кавычки.\n"
-        "2. Укажи источник: («Название книги», Часть X, Глава Y).\n"
-        "3. Одно-три предложения — почему этот фрагмент отвечает на запрос.\n\n"
-        "Не добавляй общих рассуждений. Только цитаты с атрибуцией.\n"
-        "Если подходящих цитат нет — так и напиши."
-    ),
-    MessagesPlaceholder("history"),
-    (
-        "human",
-        "Контекст:\n{context}\n\nЧто найти: {question}"
-    ),
-])
+def _extract_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                chunks.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    chunks.append(text)
+        return "\n".join(chunks).strip()
+    return str(content)
+
+
+class AgentState(TypedDict, total=False):
+    question: str
+    history: list[Any]
+    mode: str
+    route_decision: str
+    answer_style: Literal["analysis", "quote"]
+    retrieval_query: str
+    retrieved_docs: list[Any]
+    probe_max_score: float
+    context_text: str
+    clarification_needed: bool
+    final_answer: str
+
+
+# ─────────────────────────── промпты ─────────────────────────────────
+ANALYSIS_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "Ты литературовед и литературный критик. Отвечай СТРОГО НА РУССКОМ ЯЗЫКЕ.\n"
+            "Каждый фрагмент контекста помечен меткой вида [Название книги | Часть X | Глава Y]. "
+            "Используй эти метки как источник при цитировании.\n\n"
+            "Структура ответа — два блока:\n\n"
+            "Цитаты из текста\n"
+            "Приведи 2–5 прямых цитат, взятых ТОЛЬКО из предоставленного контекста. "
+            "Если цитат нету - так и напиши"
+            "После каждой цитаты укажи источник в скобках: "
+            "(«Название книги», Часть X, Глава Y).\n\n"
+            "Анализ\n"
+            "Краткий ответ на вопрос на основе приведённых цитат. "
+            "Не выходи за рамки контекста. "
+            "Если информации недостаточно — честно сообщи об этом.",
+        ),
+        MessagesPlaceholder("history"),
+        ("human", "Контекст:\n{context}\n\nВопрос: {question}"),
+    ]
+)
+
+QUOTE_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "Ты литературовед. Отвечай СТРОГО НА РУССКОМ ЯЗЫКЕ.\n"
+            "Каждый фрагмент контекста помечен меткой вида [Название книги | Часть X | Глава Y].\n\n"
+            "Твоя задача — найти и привести ТОЧНЫЕ цитаты из предоставленного контекста, "
+            "максимально близкие к запросу пользователя.\n\n"
+            "Формат ответа:\n"
+            "Для каждой найденной цитаты:\n"
+            "1. Приведи цитату дословно, заключив в кавычки.\n"
+            "2. Укажи источник: («Название книги», Часть X, Глава Y).\n"
+            "3. Одно-три предложения — почему этот фрагмент отвечает на запрос.\n\n"
+            "Не добавляй общих рассуждений. Только цитаты с атрибуцией.\n"
+            "Если подходящих цитат нет — так и напиши.",
+        ),
+        MessagesPlaceholder("history"),
+        ("human", "Контекст:\n{context}\n\nЧто найти: {question}"),
+    ]
+)
 
 
 # ═══════════════════════ BACKEND CLASS ═══════════════════════════════
 class PrefixedEmbeddings(Embeddings):
     def __init__(self, base, query_prefix="", doc_prefix=""):
-        self.base         = base
+        self.base = base
         self.query_prefix = query_prefix
-        self.doc_prefix   = doc_prefix
+        self.doc_prefix = doc_prefix
 
     def embed_documents(self, texts):
         return self.base.embed_documents([self.doc_prefix + t for t in texts])
@@ -220,7 +290,9 @@ class PrefixedEmbeddings(Embeddings):
 
 
 class PageOracleBackend:
-    def __init__(self, books_dir=".", persist_dir="./chroma_intro_db", log_callback=None):
+    def __init__(
+        self, books_dir=".", persist_dir="./chroma_intro_db", log_callback=None
+    ):
         self.books_dir = books_dir
         self.persist_dir = persist_dir
         self.log = log_callback or print
@@ -234,17 +306,40 @@ class PageOracleBackend:
         self.embeddings = None
         self.splits: list = []
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1500,
-            chunk_overlap=300,
+            chunk_size=1000,
+            chunk_overlap=200,
             add_start_index=True,
         )
+        self.temperature = 0.3  
+        self.max_tokens = 512
+        self.top_p = 0.8
+        self.score_threshold = 0.6
+        self.history: list[dict[str, str]] = []
+        self.history_max_messages = 20
+        self.history_path = Path("chat_history.json")
+        self.graph_app = None
+        self.last_route_decision = "unknown"
+        self.last_manual_override = False
+        self.last_retrieval_query = ""
 
     # ── инициализация ────────────────────────────────────────────────
-    def initialize(self, provider="DeepSeek", model_name="deepseek-chat", api_key=""):
+    def initialize(
+        self,
+        provider="DeepSeek",
+        model_name="deepseek-chat",
+        api_key="",
+        temperature: float = 0.3,
+        max_tokens: int = 512,
+        top_p: float = 0.8,
+        score_threshold: float = 0.6,
+    ):
+        self.score_threshold = score_threshold
         self.log("[Инициализация] Загружаем эмбеддинги…")
-        base_emb = HuggingFaceEmbeddings(model_name="ai-forever/ru-en-RoSBERTa")
+        base_emb = HuggingFaceEmbeddings(model_name="BAAI/bge-m3")
         self.embeddings = PrefixedEmbeddings(
-            base_emb, query_prefix="search_query: ", doc_prefix="search_document: ",
+            base_emb,
+            query_prefix="search_query: ",
+            doc_prefix="search_document: ",
         )
 
         self.log("[Инициализация] Загружаем книги…")
@@ -254,7 +349,14 @@ class PageOracleBackend:
         self._init_vectorstore()
 
         self.log("[Инициализация] Подключаем ИИ модель…")
-        self.set_model(provider, model_name, api_key)
+        self.set_model(
+            provider,
+            model_name,
+            api_key,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=top_p,
+        )
 
         self.log("[Инициализация] Система готова к работе!")
 
@@ -290,7 +392,9 @@ class PageOracleBackend:
             )
             stored = self.vectorstore._collection.count()
             if stored != len(self.splits):
-                self.log(f"[Индекс] Количество чанков изменилось ({stored} → {len(self.splits)}). Пересобираем…")
+                self.log(
+                    f"[Индекс] Количество чанков изменилось ({stored} → {len(self.splits)}). Пересобираем…"
+                )
                 shutil.rmtree(self.persist_dir)
                 self.vectorstore = self._build_vectorstore()
             else:
@@ -298,14 +402,30 @@ class PageOracleBackend:
         else:
             self.vectorstore = self._build_vectorstore()
 
+        self._create_retrievers()
+
+    def _create_retrievers(self) -> None:
+        if not self.vectorstore:
+            return
         self.mmr_retriever = self.vectorstore.as_retriever(
             search_type="mmr",
-            search_kwargs={"k": 8, "fetch_k": 50, "lambda_mult": 0.65},
+            search_kwargs={"k": 12, "fetch_k": 50, "lambda_mult": 0.7},
         )
         self.quote_retriever = self.vectorstore.as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": 5},
+            search_type="similarity_score_threshold",
+            search_kwargs={"k": 5, "score_threshold": self.score_threshold},
         )
+
+    def set_score_threshold(self, score_threshold: float) -> bool:
+        if score_threshold < 0 or score_threshold > 1:
+            self.log("[Ошибка] score_threshold должен быть в диапазоне 0..1.")
+            return False
+        self.score_threshold = score_threshold
+        self._create_retrievers()
+        self._create_chains()
+        self._create_graph()
+        self.log(f"[Ретривер] score_threshold обновлён: {score_threshold}")
+        return True
 
     def _build_vectorstore(self) -> Chroma:
         self.log("[Индекс] Создаём новый индекс…")
@@ -316,7 +436,15 @@ class PageOracleBackend:
         )
 
     # ── модель и цепочки ─────────────────────────────────────────────
-    def set_model(self, provider_name: str, model_name: str, api_key: str) -> bool:
+    def set_model(
+        self,
+        provider_name: str,
+        model_name: str,
+        api_key: str,
+        temperature: float = 0.3,
+        max_tokens: int = 512,
+        top_p: float = 0.8,
+    ) -> bool:
         cfg = PROVIDERS.get(provider_name)
         if not cfg:
             self.log(f"[Ошибка] Неизвестный провайдер: {provider_name}")
@@ -325,9 +453,38 @@ class PageOracleBackend:
         try:
             module = importlib.import_module(cfg["package"])
             model_class = getattr(module, cfg["class"])
-            self.model = model_class(model=model_name)
+            self.temperature = temperature
+            self.max_tokens = max_tokens
+            self.top_p = top_p
+
+            common_kwargs = {
+                "model": model_name,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "top_p": top_p,
+            }
+
+            # Некоторые провайдеры используют max_output_tokens вместо max_tokens.
+            if provider_name == "Google":
+                common_kwargs["max_output_tokens"] = max_tokens
+
+            try:
+                self.model = model_class(**common_kwargs)
+            except TypeError:
+                # Fallback для моделей с неполной поддержкой kwargs.
+                try:
+                    self.model = model_class(
+                        model=model_name, temperature=temperature, top_p=top_p
+                    )
+                except TypeError:
+                    self.model = model_class(model=model_name, temperature=temperature)
+
             self._create_chains()
-            self.log(f"[Модель] {provider_name} / {model_name} — подключена.")
+            self._create_graph()
+            self.log(
+                f"[Модель] {provider_name} / {model_name} — подключена "
+                f"(temperature={temperature}, max_tokens={max_tokens}, top_p={top_p})."
+            )
             return True
         except Exception as e:
             self.log(f"[Ошибка модели] {e}")
@@ -336,20 +493,366 @@ class PageOracleBackend:
     def _create_chains(self):
         if not self.model or not self.vectorstore:
             return
+        mmr = self.mmr_retriever
+        quote = self.quote_retriever
+        if not mmr or not quote:
+            return
         self.rag_chain = (
-            {"context": self.mmr_retriever | format_docs, "question": RunnablePassthrough(), "history": lambda _: [],}
+            {
+                "context": RunnableLambda(
+                    lambda data: mmr.invoke(cast(dict, data)["question"])
+                )
+                | RunnableLambda(format_docs),
+                "question": RunnableLambda(lambda data: cast(dict, data)["question"]),
+                "history": RunnableLambda(
+                    lambda data: cast(dict, data).get("history", [])
+                ),
+            }
             | RunnableLambda(ensure_context)
             | ANALYSIS_PROMPT
             | self.model
             | StrOutputParser()
-        ).with_config(run_name="rag_chain1")
+        )
         self.quote_chain = (
-            {"context": self.quote_retriever | format_docs, "question": RunnablePassthrough(), "history": lambda _: [],}
+            {
+                "context": RunnableLambda(
+                    lambda data: quote.invoke(cast(dict, data)["question"])
+                )
+                | RunnableLambda(format_docs),
+                "question": RunnableLambda(lambda data: cast(dict, data)["question"]),
+                "history": RunnableLambda(
+                    lambda data: cast(dict, data).get("history", [])
+                ),
+            }
             | RunnableLambda(ensure_context)
             | QUOTE_PROMPT
             | self.model
             | StrOutputParser()
-        ).with_config(run_name="rag_chain2")
+        )
+
+    def _create_graph(self) -> None:
+        if (
+            not self.model
+            or not self.vectorstore
+            or not self.rag_chain
+            or not self.quote_chain
+        ):
+            self.graph_app = None
+            return
+
+        workflow = StateGraph(AgentState)
+        workflow.add_node("analyze", self._node_analyze)
+        workflow.add_node("probe", self._node_probe_retrieval)
+        workflow.add_node("with_retrieval", self._node_answer_with_retrieval)
+        workflow.add_node("without_retrieval", self._node_answer_without_retrieval)
+        workflow.add_node("clarify", self._node_ask_clarification)
+
+        workflow.add_edge(START, "analyze")
+        workflow.add_edge("analyze", "probe")
+        workflow.add_conditional_edges(
+            "probe",
+            self._route_after_probe,
+            {
+                "with_retrieval": "with_retrieval",
+                "without_retrieval": "without_retrieval",
+                "clarify": "clarify",
+            },
+        )
+        workflow.add_edge("with_retrieval", END)
+        workflow.add_edge("without_retrieval", END)
+        workflow.add_edge("clarify", END)
+        self.graph_app = workflow.compile()
+
+    # ── memory / history ────────────────────────────────────────────
+    def _trim_history(self) -> None:
+        if len(self.history) > self.history_max_messages:
+            self.history = self.history[-self.history_max_messages :]
+
+    def append_user_message(self, content: str) -> None:
+        self.history.append(
+            {
+                "role": "user",
+                "content": content,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
+        self._trim_history()
+
+    def append_assistant_message(self, content: str) -> None:
+        self.history.append(
+            {
+                "role": "assistant",
+                "content": content,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        )
+        self._trim_history()
+
+    def clear_history(self) -> None:
+        self.history.clear()
+
+    def history_size(self) -> int:
+        return len(self.history)
+
+    def get_recent_history_for_prompt(self) -> list:
+        messages = []
+        for item in self.history[-self.history_max_messages :]:
+            role = item.get("role")
+            content = item.get("content", "")
+            if role == "user":
+                messages.append(HumanMessage(content=content))
+            elif role == "assistant":
+                messages.append(AIMessage(content=content))
+            elif role == "system":
+                messages.append(SystemMessage(content=content))
+        return messages
+
+    def load_history(self, filepath: str | None = None) -> bool:
+        path = Path(filepath) if filepath else self.history_path
+        if not path.exists():
+            return False
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(payload, list):
+                parsed = []
+                for item in payload:
+                    if not isinstance(item, dict):
+                        continue
+                    role = item.get("role")
+                    content = item.get("content")
+                    if role in {"user", "assistant", "system"} and isinstance(
+                        content, str
+                    ):
+                        parsed.append(
+                            {
+                                "role": role,
+                                "content": content,
+                                "timestamp": item.get(
+                                    "timestamp", datetime.utcnow().isoformat()
+                                ),
+                            }
+                        )
+                self.history = parsed
+                self._trim_history()
+                return True
+            return False
+        except Exception as err:
+            self.log(f"[История] Не удалось загрузить историю: {err}")
+            return False
+
+    def save_history(self, filepath: str | None = None) -> bool:
+        path = Path(filepath) if filepath else self.history_path
+        try:
+            path.write_text(
+                json.dumps(self.history, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            return True
+        except Exception as err:
+            self.log(f"[История] Не удалось сохранить историю: {err}")
+            return False
+
+    # ── router helpers ───────────────────────────────────────────────
+    def _looks_like_quote_request(self, question: str) -> bool:
+        q = question.lower()
+        quote_signals = [
+            "цитат",
+            "дослов",
+            "фрагмент",
+            "приведи строк",
+            "покажи отрывок",
+        ]
+        return any(signal in q for signal in quote_signals)
+
+    def _is_meta_question(self, question: str) -> bool:
+        q = question.lower()
+        meta_signals = [
+            "интерфейс",
+            "настройк",
+            "кнопк",
+            "api",
+            "ошибк",
+            "приложени",
+            "программа",
+        ]
+        book_signals = [
+            "герой",
+            "сюжет",
+            "глава",
+            "часть",
+            "цитат",
+            "роман",
+            "персонаж",
+        ]
+        return any(signal in q for signal in meta_signals) and not any(
+            signal in q for signal in book_signals
+        )
+
+    def _refine_retrieval_query(self, question: str, history: list) -> str:
+        if not self.model:
+            return question
+        try:
+            reply = self.model.invoke(
+                [
+                    SystemMessage(
+                        content=(
+                            "Ты помощник по формулировке поискового запроса для ретривера по художественным книгам. "
+                            "Верни одну короткую строку на русском без пояснений. "
+                            "Если переписывать не нужно, верни исходный вопрос."
+                        )
+                    ),
+                    *history[-6:],
+                    HumanMessage(
+                        content=f"Исходный вопрос: {question}\nСформулируй поисковый запрос:"
+                    ),
+                ]
+            )
+            text = _extract_text(getattr(reply, "content", "")).strip()
+            return text if text else question
+        except Exception:
+            return question
+
+    def _node_analyze(self, state: AgentState) -> AgentState:
+        question = (state.get("question") or "").strip()
+        history = state.get("history", [])
+
+        if self._is_meta_question(question):
+            return {
+                "question": question,
+                "history": history,
+                "route_decision": "direct",
+                "answer_style": "analysis",
+                "retrieval_query": question,
+            }
+
+        answer_style = (
+            "quote" if self._looks_like_quote_request(question) else "analysis"
+        )
+        retrieval_query = self._refine_retrieval_query(question, history)
+        return {
+            "question": question,
+            "history": history,
+            "answer_style": answer_style,
+            "retrieval_query": retrieval_query,
+            "route_decision": "pending",
+        }
+
+    def _node_probe_retrieval(self, state: AgentState) -> AgentState:
+        if state.get("route_decision") == "direct":
+            return state
+
+        query = state.get("retrieval_query") or state.get("question") or ""
+        max_score = 0.0
+        docs = []
+        vectorstore = self.vectorstore
+        try:
+            if vectorstore:
+                pairs = vectorstore.similarity_search_with_relevance_scores(query, k=3)
+                docs = [doc for doc, _score in pairs]
+                if pairs:
+                    max_score = max(score for _, score in pairs)
+        except Exception:
+            docs = []
+
+        state["retrieved_docs"] = docs
+        state["probe_max_score"] = max_score
+        state["context_text"] = format_docs(docs) if docs else ""
+        state["clarification_needed"] = (not docs) or (
+            max_score < max(0.35, self.score_threshold - 0.15)
+        )
+        return state
+
+    def _route_after_probe(self, state: AgentState) -> str:
+        if state.get("route_decision") == "direct":
+            return "without_retrieval"
+        if state.get("clarification_needed"):
+            return "clarify"
+        return "with_retrieval"
+
+    def _node_answer_with_retrieval(self, state: AgentState) -> AgentState:
+        style = state.get("answer_style", "analysis")
+        question = state.get("question", "")
+        history = state.get("history", [])
+        payload = {"question": question, "history": history}
+
+        if style == "quote":
+            if not self.quote_chain:
+                return {
+                    "final_answer": "[Ошибка] Цепочка цитат не инициализирована.",
+                    "route_decision": "error",
+                    "retrieval_query": state.get("retrieval_query", question),
+                }
+            answer = self.quote_chain.invoke(payload)
+            route = "retrieval-quote"
+        else:
+            if not self.rag_chain:
+                return {
+                    "final_answer": "[Ошибка] Цепочка анализа не инициализирована.",
+                    "route_decision": "error",
+                    "retrieval_query": state.get("retrieval_query", question),
+                }
+            answer = self.rag_chain.invoke(payload)
+            route = "retrieval-analysis"
+
+        return {
+            "final_answer": answer,
+            "route_decision": route,
+            "retrieval_query": state.get("retrieval_query", question),
+        }
+
+    def _node_answer_without_retrieval(self, state: AgentState) -> AgentState:
+        question = state.get("question", "")
+        history = state.get("history", [])
+        model = self.model
+        if not model:
+            return {
+                "final_answer": "Не удалось ответить без ретривера: модель не инициализирована.",
+                "route_decision": "direct",
+                "retrieval_query": state.get("retrieval_query", question),
+            }
+        try:
+            reply = model.invoke(
+                [
+                    SystemMessage(
+                        content=(
+                            "Ответь кратко и по делу на русском языке. "
+                            "Если вопрос не относится к содержанию загруженных книг, объясни это прямо."
+                        )
+                    ),
+                    *history[-6:],
+                    HumanMessage(content=question),
+                ]
+            )
+            answer = _extract_text(getattr(reply, "content", ""))
+        except Exception:
+            answer = "Не удалось ответить без ретривера. Попробуйте переформулировать вопрос."
+
+        return {
+            "final_answer": answer,
+            "route_decision": "direct",
+            "retrieval_query": state.get("retrieval_query", question),
+        }
+
+    def _node_ask_clarification(self, state: AgentState) -> AgentState:
+        question = state.get("question", "")
+        retrieval_query = state.get("retrieval_query", question)
+        answer = (
+            "Мне нужно немного уточнить запрос, чтобы найти точные фрагменты.\n"
+            "Уточните, пожалуйста: книгу, героя, часть/главу или ключевую сцену, которую нужно разобрать.\n"
+            f"Текущий поисковый запрос: {retrieval_query}"
+        )
+        return {
+            "final_answer": answer,
+            "route_decision": "clarify",
+            "retrieval_query": retrieval_query,
+        }
+
+    def get_last_debug_info(self) -> dict:
+        return {
+            "route_decision": self.last_route_decision,
+            "manual_override": self.last_manual_override,
+            "retrieval_query": self.last_retrieval_query,
+            "history_size": self.history_size(),
+        }
 
     # ── публичные методы ─────────────────────────────────────────────
     def add_document(self, filepath: str):
@@ -362,52 +865,91 @@ class PageOracleBackend:
             return
         existing = self.vectorstore.get(where={"source": str(path)})
         if existing["ids"]:
-            self.log(f"[Пропуск] «{path.name}» уже есть в базе ({len(existing['ids'])} чанков).")
+            self.log(
+                f"[Пропуск] «{path.name}» уже есть в базе ({len(existing['ids'])} чанков)."
+            )
             return
-        new_splits = self.text_splitter.split_documents(self._load_and_annotate(str(path)))
+        new_splits = self.text_splitter.split_documents(
+            self._load_and_annotate(str(path))
+        )
         self.vectorstore.add_documents(new_splits)
         self.loaded_books.append(path.name)
         self.log(f"[Готово] Добавлено {len(new_splits)} чанков из «{path.name}».")
 
-    """@traceable(name="answer_question")
-    def answer_question(self, question: str) -> str:
-        
-        Основная точка входа в RAG.
-        Эту функцию мы будем отслеживать в LangSmith как корневой run.
-        
-        return self.rag_chain.invoke(question)"""
+    def ask(self, question: str, mode: str = "auto") -> str:
+        question = question.strip()
+        if not question:
+            return "[Ошибка] Вопрос пустой."
 
-    def ask(self, question: str, mode: str = "analysis") -> str:
+        history_messages = self.get_recent_history_for_prompt()
+        self.last_manual_override = mode in {"analysis", "quote"}
+        self.last_route_decision = "unknown"
+        self.last_retrieval_query = question
+
         if mode == "quote":
             if not self.quote_chain:
                 return "[Ошибка] Система не инициализирована."
-            return self.quote_chain.invoke(question)
-        else:
+            answer = self.quote_chain.invoke(
+                {"question": question, "history": history_messages}
+            )
+            self.last_route_decision = "manual-quote"
+            self.append_user_message(question)
+            self.append_assistant_message(answer)
+            return answer
+
+        if mode == "analysis":
             if not self.rag_chain:
                 return "[Ошибка] Система не инициализирована."
-            return self.rag_chain.invoke(question)
+            answer = self.rag_chain.invoke(
+                {"question": question, "history": history_messages}
+            )
+            self.last_route_decision = "manual-analysis"
+            self.append_user_message(question)
+            self.append_assistant_message(answer)
+            return answer
+
+        if self.graph_app:
+            try:
+                state: AgentState = {
+                    "question": question,
+                    "history": history_messages,
+                    "mode": "auto",
+                }
+                result = self.graph_app.invoke(state)
+                answer = (
+                    result.get("final_answer", "") if isinstance(result, dict) else ""
+                )
+                self.last_route_decision = (
+                    result.get("route_decision", "auto-unknown")
+                    if isinstance(result, dict)
+                    else "auto-unknown"
+                )
+                self.last_retrieval_query = (
+                    result.get("retrieval_query", question)
+                    if isinstance(result, dict)
+                    else question
+                )
+                if not answer:
+                    raise RuntimeError("Пустой ответ графа")
+                self.append_user_message(question)
+                self.append_assistant_message(answer)
+                return answer
+            except Exception as err:
+                self.log(
+                    f"[Router] Ошибка auto-routing: {err}. Переходим на fallback analysis."
+                )
+
+        if not self.rag_chain:
+            return "[Ошибка] Система не инициализирована."
+        answer = self.rag_chain.invoke(
+            {"question": question, "history": history_messages}
+        )
+        self.last_route_decision = "fallback-analysis"
+        self.append_user_message(question)
+        self.append_assistant_message(answer)
+        return answer
 
 
 # ═══════════════════════ CLI (обратная совместимость) ═════════════════
 if __name__ == "__main__":
-    backend = PageOracleBackend()
-    backend.initialize()
-    print("\nКоманды:")
-    print("  /add <путь>    — добавить книгу в базу без пересборки индекса")
-    print("  /цитата <текст> — точный поиск цитат (без анализа, только фрагменты)")
-    print("  (без префикса)  — тематический анализ с цитатами и рассуждением")
-    while True:
-        question = input("\nВведите вопрос (или 'exit' для выхода): ").strip()
-        if question.lower() in ["exit", "quit", "выйти", "выход", "закрыть", "завершить"]:
-            break
-        if question.lower().startswith("/add "):
-            backend.add_document(question[5:])
-            continue
-        if question.lower().startswith("/цитата "):
-            query = question[8:].strip()
-            if query:
-                print(backend.ask(query, mode="quote"))
-            continue
-        if not question:
-            continue
-        print(backend.ask(question))
+    PageOracleBackend().initialize()
