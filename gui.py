@@ -524,7 +524,7 @@ class PageOracleApp:
 
 		self.btn_clear_chat = Button(
 			self.window,
-			text="🗑Ч",
+			text="🗑",
 			bg=SURFACE,
 			fg=TEXT_SEC,
 			activebackground=BORDER,
