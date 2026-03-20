@@ -49,7 +49,7 @@ python gui.py
 
 ![ывыывы](https://github.com/user-attachments/assets/c1d01884-6a17-4200-a01b-bc03c4e27e97)
 
-<ol>
+<ol start="2">
   <li>2. Основные элементы:</li> 
   <ul>
     <li><strong>Боковая панель:</strong> кнопки загрузки книг и настроек.</li>
