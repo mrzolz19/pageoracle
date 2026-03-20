@@ -1,5 +1,5 @@
 # Tutorial: pageoracle 
-PageOracle — это настольное приложение на базе искусственного интеллекта, разработанное для того, чтобы помочь пользователям взаимодействовать с учебниками. Оно позволяет загружать книги (например, .txt файлы), задавать вопросы об их содержании и получать интеллектуальные ответы, сгенерированные искусственным интеллектом. Система преобразует книги в базу знаний с возможностью поиска, интегрируется с различными большими языковыми моделями (БЯМ) и управляет историей ваших диалогов с помощью интуитивно понятного ИИ-агента на основе графов и удобного графического интерфейса.
+PageOracle — это настольное приложение на базе искусственного интеллекта, разработанное для того, чтобы помочь пользователям взаимодействовать с учебниками. Оно позволяет загружать книги (например, .txt файлы), задавать вопросы об их содержании и получать интеллектуальные ответы, сгенерированные искусственным интеллектом. Система преобразует книги в базу знаний с возможностью поиска, интегрируется с различными большими языковыми моделями и управляет историей ваших диалогов с помощью интуитивно понятного ИИ-агента на основе графов и удобного графического интерфейса.
 
 ## Visual Overview 
 
@@ -32,13 +32,13 @@ flowchart TD
   A6 – "Provides History to Agent" --> A5
 ```
 
-## Chapters 
-1. [User Interface (GUI) ](01_user_interface__gui__.md)
-2. [Book Processing & Knowledge Base ](02_book_processing___knowledge_base_.md)
-3. [Application Settings ](03_application_settings_.md)
-4. [LLM Integration & Configuration ](04_llm_integration___configuration_.md)
-5. [Retrieval Mechanisms ](05_retrieval_mechanisms_.md)
-6. [Conversational AI Agent (LangGraph) ](06_conversational_ai_agent__langgraph__.md)
-7. [Chat History & Context Management ](07_chat_history___context_management_.md)
+## Главы
+1. [Пользовательский интерфейс (GUI)](01_user_interface__gui__.md)
+2. [Обработка заказов и база знаний](02_book_processing___knowledge_base_.md)
+3. [Настройки приложения](03_application_settings_.md)
+4. [Интеграция и настройка больших языковых моделей](04_llm_integration___configuration_.md)
+5. [Механизмы поиска](05_retrieval_mechanisms_.md)
+6. [Диалоговый ИИ-агент (LangGraph)](06_conversational_ai_agent__langgraph__.md)
+7. [История чата и управление контекстом](07_chat_history___context_management_.md)
 
 
