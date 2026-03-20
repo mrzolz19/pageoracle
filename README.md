@@ -19,8 +19,13 @@ PageOracle — это настольное приложение на базе и
 
 
 ## Как пользоваться PageOracle
+### Запуск PageOracle
+1. Клонируете репозиторий или скачайте с сайта Github репозитория:
 
+git clone https://github.com/yourusername/pageoracle.git
+cd pageoracle
 
+![ывыывы](https://github.com/user-attachments/assets/c1d01884-6a17-4200-a01b-bc03c4e27e97)
 
 ## Пользовательский интерфейс (GUI)
 
