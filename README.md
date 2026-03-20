@@ -3,8 +3,7 @@ PageOracle is an **AI-powered desktop application** designed to help users *inte
 
 ## Visual Overview 
 
-```
-mermaid 
+```mermaid 
 flowchart TD
   A0["User Interface (GUI)
 "]
