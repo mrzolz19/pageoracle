@@ -1,5 +1,5 @@
 # Tutorial: pageoracle 
-PageOracle is an **AI-powered desktop application** designed to help users *interact with text books*. It allows you to **load books** (like `.txt` files), ask questions about their content, and receive **intelligent AI-generated answers**. The system processes books into a *searchable knowledge base*, integrates with various *club228697769 (*Large) Language Models (LLMs)*, and manages your conversation history through an intuitive *graph-based AI agent* and a user-friendly GUI. 
+PageOracle — это настольное приложение на базе искусственного интеллекта, разработанное для того, чтобы помочь пользователям взаимодействовать с учебниками. Оно позволяет загружать книги (например, .txt файлы), задавать вопросы об их содержании и получать интеллектуальные ответы, сгенерированные искусственным интеллектом. Система преобразует книги в базу знаний с возможностью поиска, интегрируется с различными большими языковыми моделями (БЯМ) и управляет историей ваших диалогов с помощью интуитивно понятного ИИ-агента на основе графов и удобного графического интерфейса.
 
 ## Visual Overview 
 
