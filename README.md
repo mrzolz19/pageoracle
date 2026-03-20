@@ -7,7 +7,7 @@ PageOracle — это настольное приложение на базе и
   
 
 ## Главы
-1. [Пользовательский интерфейс (GUI)](01_user_interface__gui__.md)
+1. [Пользовательский интерфейс (GUI)]([01_user_interface__gui__.md](https://github.com/mrzolz19/pageoracle/blob/main/README.md#пользовательский-интерфейс-gui))
 2. [Обработка заказов и база знаний](02_book_processing___knowledge_base_.md)
 3. [Настройки приложения](03_application_settings_.md)
 4. [Интеграция и настройка больших языковых моделей](04_llm_integration___configuration_.md)
