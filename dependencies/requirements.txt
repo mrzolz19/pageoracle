@@ -9,3 +9,4 @@ langchain-deepseek
 langchain-openai
 langchain
 sentence-transformers
+rank_bm25
