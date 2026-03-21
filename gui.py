@@ -51,6 +51,7 @@ BORDER = "#45455A"
 SUCCESS = "#4CAF50"
 ERROR = "#FF6B6B"
 LOG_BG = "#1A1A28"
+INPUT_PLACEHOLDER = "Задайте вопрос по загруженным книгам…"
 
 
 class TextRedirector(io.TextIOBase):
@@ -361,7 +362,7 @@ class PageOracleApp:
 
 		self.canvas.create_rectangle(0, 0, 280, 800, fill=SIDEBAR_BG, outline="")
 		self.canvas.create_text(16, 24, anchor="nw", text="PageOracle", fill=PRIMARY, font=("Segoe UI", 22, "bold"))
-		self.canvas.create_text(16, 57, anchor="nw", text="AI Book Reader", fill=TEXT_SEC, font=("Segoe UI", 10))
+		self.canvas.create_text(16, 61, anchor="nw", text="AI Book Reader", fill=TEXT_SEC, font=("Segoe UI", 10))
 		self.canvas.create_line(16, 94, 264, 94, fill=BORDER)
 
 		self.btn_load = Button(
@@ -505,7 +506,7 @@ class PageOracleApp:
 		)
 		self.input_entry.place(x=324, y=598, width=712, height=20)
 		self.input_entry.bind("<Return>", lambda _evt: self._on_send())
-		self.input_entry.insert(0, "Задайте вопрос по загруженным книгам…")
+		self.input_entry.insert(0, INPUT_PLACEHOLDER)
 		self.input_entry.bind("<FocusIn>", self._clear_placeholder)
 
 		self.btn_send = Button(
@@ -599,7 +600,7 @@ class PageOracleApp:
 		sys.stdout = TextRedirector(lambda text: self.window.after(0, self._append_log, text.rstrip()), self._orig_stdout)
 
 	def _clear_placeholder(self, _event=None) -> None:
-		if self.input_entry.get().strip() == "Задайте вопрос по загруженным книгам…":
+		if self.input_entry.get().strip() == INPUT_PLACEHOLDER:
 			self.input_entry.delete(0, END)
 
 	def _append_log(self, text: str, level: str = "info") -> None:
@@ -730,7 +731,7 @@ class PageOracleApp:
 		question = self.input_entry.get().strip()
 		if not question or self.is_busy:
 			return
-		if question == "Задайте вопрос по загруженным книгам…":
+		if question == INPUT_PLACEHOLDER:
 			return
 		if not self.is_initialized:
 			self._append_chat("Система", "Подождите, идет инициализация…", is_ai=True)
@@ -779,7 +780,8 @@ class PageOracleApp:
 			self._append_log(
 				f"[Router] route={debug.get('route_decision')} "
 				f"manual_override={debug.get('manual_override')} "
-				f"history={debug.get('history_size')}",
+				f"history={debug.get('history_size')} "
+				f"retrieval_query={debug.get('retrieval_query')}",
 				"info",
 			)
 
@@ -799,7 +801,7 @@ class PageOracleApp:
 	def _on_clear_history(self) -> None:
 		if not self.backend:
 			return
-		if not messagebox.askyesno("Очистка истории", "Удалить историю диалога из памяти и файла?"):
+		if not messagebox.askyesno("Очистка истории", "Удалить историю диалога из файла?"):
 			return
 		self.backend.clear_history()
 		try:
@@ -866,11 +868,9 @@ class PageOracleApp:
 		sys.stdout = self._orig_stdout
 		self.window.destroy()
 
-
 def main() -> None:
 	app = PageOracleApp()
 	app.run()
-
 
 if __name__ == "__main__":
 	main()
