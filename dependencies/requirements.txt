@@ -11,3 +11,4 @@ langchain
 sentence-transformers
 rank_bm25
 torch
+torchvision --index-url https://download.pytorch.org/whl/cu130
