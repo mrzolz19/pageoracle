@@ -2,6 +2,7 @@ import re
 import json
 import shutil
 import importlib
+import gc
 from pathlib import Path
 from datetime import datetime
 from typing import Any
@@ -13,11 +14,20 @@ import os
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.embeddings import Embeddings
 from langchain_community.vectorstores import Chroma
+from langchain_community.retrievers import BM25Retriever
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableLambda
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.retrievers import BaseRetriever
+from sentence_transformers import CrossEncoder
+import hashlib
 from langgraph.graph import END, START, StateGraph
+
+
+RETRIEVER_K = 20
+RETRIEVER_FETCH_K = 50
+RERANK_TOP_K = 5
 
 # ───────────────────── провайдеры LLM (для GUI настроек) ─────────────
 PROVIDERS = {
@@ -109,13 +119,13 @@ _ROMAN_RE = re.compile(r"^\s*([IVXLCDM]{1,7})\.?\s*$")
 _EPILOGUE_RE = re.compile(r"^\s*ЭПИЛОГ\s*$", re.IGNORECASE)
 
 
-def annotate_book(docs: list, book_title: str) -> list:
-    result = []
+def annotate_book(docs: list[Document], book_title: str) -> list[Document]:
+    result: list[Document] = []
     for doc in docs:
         lines = doc.page_content.split("\n")
         current_part = "Вступление"
         current_chapter = "—"
-        seg_lines: list = []
+        seg_lines: list[str] = []
 
         def flush(part: str, chapter: str) -> None:
             text = "\n".join(seg_lines).strip()
@@ -167,8 +177,8 @@ def annotate_book(docs: list, book_title: str) -> list:
     return result
 
 
-def format_docs(docs: list) -> str:
-    parts = []
+def format_docs(docs: list[Document]) -> str:
+    parts: list[str] = []
     for doc in docs:
         m = doc.metadata
         ref = " | ".join(
@@ -215,20 +225,6 @@ def _extract_text(content: Any) -> str:
     return str(content)
 
 
-class AgentState(TypedDict, total=False):
-    question: str
-    history: list[Any]
-    mode: str
-    route_decision: str
-    answer_style: Literal["analysis", "quote"]
-    retrieval_query: str
-    retrieved_docs: list[Any]
-    probe_max_score: float
-    context_text: str
-    clarification_needed: bool
-    final_answer: str
-
-
 # ─────────────────────────── промпты ─────────────────────────────────
 ANALYSIS_PROMPT = ChatPromptTemplate.from_messages(
     [
@@ -239,7 +235,7 @@ ANALYSIS_PROMPT = ChatPromptTemplate.from_messages(
             "Используй эти метки как источник при цитировании.\n\n"
             "Структура ответа — два блока:\n\n"
             "Цитаты из текста\n"
-            "Приведи 2–5 прямых цитат, взятых ТОЛЬКО из предоставленного контекста. "
+            "Приведи несколько самых релеватных прямых цитат, взятых ТОЛЬКО из предоставленного контекста. "
             "Если подходящих цитат в контексте нет — так и напиши.\n"
             "После каждой цитаты укажи источник в скобках, опираясь на метку: "
             "(«Название источника», Раздел/Часть, Глава/Параграф).\n\n"
@@ -247,7 +243,7 @@ ANALYSIS_PROMPT = ChatPromptTemplate.from_messages(
             "Краткий, емкий ответ на вопрос пользователя на основе приведённых цитат. "
             "Учитывай специфику текста: для научной литературы оперируй фактами и терминами, для художественной — сюжетом и образами. "
             "Не выходи за рамки предоставленного контекста и не придумывай факты. "
-            "Если информации для полноценного ответа недостаточно — честно сообщи об этом."
+            "Если информации для полноценного ответа недостаточно — честно сообщи об этом.",
         ),
         MessagesPlaceholder("history"),
         ("human", "Контекст:\n{context}\n\nВопрос: {question}"),
@@ -277,6 +273,20 @@ QUOTE_PROMPT = ChatPromptTemplate.from_messages(
 
 
 # ═══════════════════════ BACKEND CLASS ═══════════════════════════════
+
+class AgentState(TypedDict, total=False):
+    question: str
+    history: list[Any]
+    mode: str
+    route_decision: str
+    answer_style: Literal["analysis", "quote"]
+    retrieval_query: str
+    retrieved_docs: list[Any]
+    probe_max_score: float
+    context_text: str
+    clarification_needed: bool
+    final_answer: str
+
 class PrefixedEmbeddings(Embeddings):
     def __init__(self, base, query_prefix="", doc_prefix=""):
         self.base = base
@@ -289,6 +299,72 @@ class PrefixedEmbeddings(Embeddings):
     def embed_query(self, text):
         return self.base.embed_query(self.query_prefix + text)
 
+class SimpleReranker:
+    def __init__(self, model_name: str):
+        """
+        Args:
+            model_name: Название модели cross-encoder
+        """
+        self.model = CrossEncoder(model_name)
+    
+    def rerank(
+        self, query: str, documents: list[Document], top_n: int = RERANK_TOP_K
+    ) -> list[Document]:
+        """      
+        Args:
+            query: Поисковый запрос
+            documents: Список документов для переоценки
+            top_n: Сколько документов возвращает
+        Returns:
+            Список топ-N документов после rerank
+        """
+
+        if not documents:
+            return []
+        
+        # Подготавливаем пары (query, document)
+        pairs = [[query, doc.page_content] for doc in documents]
+        
+        # Получаем скоры релевантности
+        scores = self.model.predict(pairs)
+        
+        # Сортируем документы по скору
+        doc_score_pairs = list(zip(documents, scores))
+        doc_score_pairs.sort(key=lambda x: x[1], reverse=True)
+        
+        # Отбираем топ-N документов (score записываем в метаданные)
+        result = []
+        for doc, score in doc_score_pairs[:top_n]:
+            doc.metadata = doc.metadata or {}
+            doc.metadata["rerank_score"] = float(score)
+            result.append(doc)
+        
+        return result
+
+class HybridRerankerRetriever(BaseRetriever):
+    first_retriever: BaseRetriever
+    second_retriever: BaseRetriever
+    reranker: SimpleReranker
+    k: int = RERANK_TOP_K
+
+    def _dedup_docs(self, docs: list[Document]) -> list[Document]:
+        '''объединение результатов с дедупликацией'''
+        seen: set[str] = set()
+        result: list[Document] = []
+        for d in docs:
+            content = d.page_content
+            uid = hashlib.md5(content.encode("utf-8")).hexdigest()
+            if uid not in seen:
+                seen.add(uid)
+                result.append(d)
+        return result
+    
+    def _get_relevant_documents(self, query: str, **_: Any) -> list[Document]:
+        first_docs = self.first_retriever.invoke(query)
+        second_docs = self.second_retriever.invoke(query)
+        merged = self._dedup_docs(first_docs + second_docs)
+
+        return self.reranker.rerank(query, merged, self.k)
 
 class PageOracleBackend:
     def __init__(
@@ -311,8 +387,8 @@ class PageOracleBackend:
             chunk_overlap=200,
             add_start_index=True,
         )
-        self.temperature = 0.3  
-        self.max_tokens = 512
+        self.temperature = 0.2  
+        self.max_tokens = 4096
         self.top_p = 0.8
         self.score_threshold = 0.6
         self.history: list[dict[str, str]] = []
@@ -322,6 +398,7 @@ class PageOracleBackend:
         self.last_route_decision = "unknown"
         self.last_manual_override = False
         self.last_retrieval_query = ""
+        self.reranker: SimpleReranker | None = None
 
     # ── инициализация ────────────────────────────────────────────────
     def initialize(
@@ -329,9 +406,9 @@ class PageOracleBackend:
         provider="DeepSeek",
         model_name="deepseek-chat",
         api_key="",
-        temperature: float = 0.3,
-        max_tokens: int = 512,
-        top_p: float = 0.8,
+        temperature: float = 0.2,
+        max_tokens: int = 2048,
+        top_p: float = 0.9,
         score_threshold: float = 0.6,
     ):
         self.score_threshold = score_threshold
@@ -366,55 +443,174 @@ class PageOracleBackend:
         if not txt_files:
             self.log(f"[!] Нет .txt файлов в «{self.books_dir}»")
             return
-        all_annotated: list = []
+        all_annotated: list[Document] = []
+        self.loaded_books = []
         for tf in txt_files:
             all_annotated.extend(self._load_and_annotate(str(tf)))
             self.loaded_books.append(tf.name)
         self.splits = self.text_splitter.split_documents(all_annotated)
         self.log(f"Всего чанков: {len(self.splits)}")
 
+    def _normalize_source_path(self, path: Path | str) -> str:
+        try:
+            return str(Path(path).resolve())
+        except Exception:
+            return str(path)
+
+    def _get_indexed_documents(self) -> list[Document]:
+        if not self.vectorstore:
+            return []
+        try:
+            payload = self.vectorstore.get(include=["documents", "metadatas"])
+            texts = payload.get("documents", [])
+            metadatas = payload.get("metadatas", [])
+            docs: list[Document] = []
+            for i, text in enumerate(texts):
+                if not isinstance(text, str):
+                    continue
+                metadata = metadatas[i] if i < len(metadatas) and isinstance(metadatas[i], dict) else {}
+                docs.append(Document(page_content=text, metadata=metadata))
+            return docs
+        except Exception as err:
+            self.log(f"[Индекс] Не удалось прочитать документы из кэша: {err}")
+            return []
+
+    def _refresh_loaded_books_from_splits(self) -> None:
+        names: list[str] = []
+        seen: set[str] = set()
+        for doc in self.splits:
+            source = str((doc.metadata or {}).get("source", "")).strip()
+            if not source:
+                continue
+            name = Path(source).name
+            if name and name not in seen:
+                seen.add(name)
+                names.append(name)
+        if names:
+            self.loaded_books = names
+
+    def _ensure_book_in_library(self, filepath: str) -> Path:
+        src = Path(filepath).resolve()
+        books_root = Path(self.books_dir).resolve()
+        books_root.mkdir(parents=True, exist_ok=True)
+
+        if src.parent == books_root:
+            return src
+
+        target = books_root / src.name
+        if target.exists():
+            try:
+                if src.samefile(target):
+                    return target
+            except Exception:
+                pass
+
+            stem = target.stem
+            suffix = target.suffix
+            index = 1
+            while True:
+                candidate = books_root / f"{stem}_{index}{suffix}"
+                if not candidate.exists():
+                    target = candidate
+                    break
+                index += 1
+
+        shutil.copy2(src, target)
+        self.log(f"[Файлы] Книга скопирована в библиотеку: {target.name}")
+        return target
+
     def _load_and_annotate(self, filepath: str) -> list:
         path = Path(filepath)
         book_title = path.stem.replace("_", " ").replace("-", " ")
         raw_docs = TextLoader(str(path), autodetect_encoding=True).load()
         annotated = annotate_book(raw_docs, book_title)
+        normalized_source = self._normalize_source_path(path)
+        for doc in annotated:
+            doc.metadata = doc.metadata or {}
+            doc.metadata["source"] = normalized_source
         self.log(f"  «{path.name}» → {len(annotated)} сегментов (part/chapter)")
         return annotated
 
     # ── векторное хранилище ──────────────────────────────────────────
     def _init_vectorstore(self):
-        if not self.splits:
-            return
         persist = Path(self.persist_dir)
+        if not self.splits and not persist.exists():
+            return
         if persist.exists():
             self.vectorstore = Chroma(
                 embedding_function=self.embeddings,
                 persist_directory=self.persist_dir,
             )
             stored = self.vectorstore._collection.count()
-            if stored != len(self.splits):
-                self.log(
-                    f"[Индекс] Количество чанков изменилось ({stored} → {len(self.splits)}). Пересобираем…"
-                )
-                shutil.rmtree(self.persist_dir)
-                self.vectorstore = self._build_vectorstore()
+            if stored > 0:
+                indexed_docs = self._get_indexed_documents()
+                if indexed_docs:
+                    self.splits = indexed_docs
+                    self._refresh_loaded_books_from_splits()
+                    self.log(
+                        f"[Индекс] Загружен из кэша ({stored} чанков). Используем сохранённый индекс."
+                    )
+                else:
+                    self.log("[Индекс] Кэш найден, но документы не прочитаны. Пересоздаём индекс.")
+                    self.vectorstore = None
+                    self.mmr_retriever = None
+                    self.quote_retriever = None
+                    self.rag_chain = None
+                    self.quote_chain = None
+                    gc.collect()
+                    shutil.rmtree(self.persist_dir, ignore_errors=True)
+                    self.vectorstore = self._build_vectorstore()
             else:
-                self.log(f"[Индекс] Загружен из кэша ({stored} чанков).")
+                self.log("[Индекс] Кэш пуст. Пересоздаём индекс.")
+                self.vectorstore = None
+                self.mmr_retriever = None
+                self.quote_retriever = None
+                self.rag_chain = None
+                self.quote_chain = None
+                gc.collect()
+                shutil.rmtree(self.persist_dir, ignore_errors=True)
+                self.vectorstore = self._build_vectorstore()
         else:
             self.vectorstore = self._build_vectorstore()
 
         self._create_retrievers()
 
     def _create_retrievers(self) -> None:
-        if not self.vectorstore:
+        if not self.vectorstore or not self.splits:
             return
-        self.mmr_retriever = self.vectorstore.as_retriever(
-            search_type="mmr",
-            search_kwargs={"k": 12, "fetch_k": 50, "lambda_mult": 0.7},
+        if self.reranker is None:
+            # CrossEncoder тяжёлый: инициализируем один раз и переиспользуем.
+            self.reranker = SimpleReranker("BAAI/bge-reranker-base")
+
+        self.mmr_retriever = HybridRerankerRetriever(
+            first_retriever=self.vectorstore.as_retriever(
+                search_type="mmr",
+                search_kwargs={
+                    "k": RETRIEVER_K,
+                    "fetch_k": RETRIEVER_FETCH_K,
+                    "lambda_mult": 0.7,
+                },
+            ),
+            second_retriever=BM25Retriever.from_documents(
+                self.splits,
+                k=RETRIEVER_K,
+                score_threshold=self.score_threshold,
+            ),
+            reranker=self.reranker,
+            k=RERANK_TOP_K,
         )
-        self.quote_retriever = self.vectorstore.as_retriever(
-            search_type="similarity_score_threshold",
-            search_kwargs={"k": 5, "score_threshold": self.score_threshold},
+        self.quote_retriever = HybridRerankerRetriever(
+            first_retriever=self.vectorstore.as_retriever(
+                search_type="similarity_score_threshold",
+                search_kwargs={"k": RETRIEVER_K, "score_threshold": self.score_threshold},
+            ),
+            second_retriever=BM25Retriever.from_documents(
+                self.splits,
+                k=RETRIEVER_K,
+                score_threshold=self.score_threshold,
+            ),
+            reranker=self.reranker,
+            k=RERANK_TOP_K,
         )
 
     def set_score_threshold(self, score_threshold: float) -> bool:
@@ -442,8 +638,8 @@ class PageOracleBackend:
         provider_name: str,
         model_name: str,
         api_key: str,
-        temperature: float = 0.3,
-        max_tokens: int = 512,
+        temperature: float = 0.2,
+        max_tokens: int = 4096,
         top_p: float = 0.8,
     ) -> bool:
         cfg = PROVIDERS.get(provider_name)
@@ -696,7 +892,7 @@ class PageOracleBackend:
                 [
                     SystemMessage(
                         content=(
-                            "Ты помощник по формулировке поискового запроса для ретривера по художественным книгам. "
+                            "Ты помощник по формулировке поискового запроса для ретривера по книгам. "
                             "Верни одну короткую строку на русском без пояснений. "
                             "Если переписывать не нужно, верни исходный вопрос."
                         )
@@ -751,7 +947,8 @@ class PageOracleBackend:
                 docs = [doc for doc, _score in pairs]
                 if pairs:
                     max_score = max(score for _, score in pairs)
-        except Exception:
+        except Exception as err:
+            self.log(f"[Router] Ошибка probe-retrieval: {err}")
             docs = []
 
         state["retrieved_docs"] = docs
@@ -769,29 +966,58 @@ class PageOracleBackend:
             return "clarify"
         return "with_retrieval"
 
+    def _invoke_prompt_with_context(
+        self,
+        prompt: ChatPromptTemplate,
+        question: str,
+        history: list[Any],
+        context_text: str,
+    ) -> str:
+        model = self.model
+        if not model:
+            raise RuntimeError("Модель не инициализирована")
+
+        payload = ensure_context(
+            {
+                "context": context_text,
+                "question": question,
+                "history": history,
+            }
+        )
+        messages = prompt.format_messages(**payload)
+        reply = model.invoke(messages)
+        return _extract_text(getattr(reply, "content", ""))
+
     def _node_answer_with_retrieval(self, state: AgentState) -> AgentState:
         style = state.get("answer_style", "analysis")
         question = state.get("question", "")
         history = state.get("history", [])
-        payload = {"question": question, "history": history}
+        docs = state.get("retrieved_docs", [])
+        context_text = state.get("context_text", "")
+        if not context_text and docs:
+            context_text = format_docs(cast(list[Document], docs))
 
         if style == "quote":
-            if not self.quote_chain:
+            if not self.model:
                 return {
-                    "final_answer": "[Ошибка] Цепочка цитат не инициализирована.",
+                    "final_answer": "[Ошибка] Модель не инициализирована.",
                     "route_decision": "error",
                     "retrieval_query": state.get("retrieval_query", question),
                 }
-            answer = self.quote_chain.invoke(payload)
+            answer = self._invoke_prompt_with_context(
+                QUOTE_PROMPT, question, history, context_text
+            )
             route = "retrieval-quote"
         else:
-            if not self.rag_chain:
+            if not self.model:
                 return {
-                    "final_answer": "[Ошибка] Цепочка анализа не инициализирована.",
+                    "final_answer": "[Ошибка] Модель не инициализирована.",
                     "route_decision": "error",
                     "retrieval_query": state.get("retrieval_query", question),
                 }
-            answer = self.rag_chain.invoke(payload)
+            answer = self._invoke_prompt_with_context(
+                ANALYSIS_PROMPT, question, history, context_text
+            )
             route = "retrieval-analysis"
 
         return {
@@ -864,7 +1090,11 @@ class PageOracleBackend:
         if not self.vectorstore:
             self.log("[Ошибка] Векторная база не инициализирована.")
             return
-        existing = self.vectorstore.get(where={"source": str(path)})
+
+        path = self._ensure_book_in_library(str(path))
+        source_value = self._normalize_source_path(path)
+
+        existing = self.vectorstore.get(where={"source": source_value})
         if existing["ids"]:
             self.log(
                 f"[Пропуск] «{path.name}» уже есть в базе ({len(existing['ids'])} чанков)."
@@ -873,8 +1103,19 @@ class PageOracleBackend:
         new_splits = self.text_splitter.split_documents(
             self._load_and_annotate(str(path))
         )
+        for doc in new_splits:
+            doc.metadata = doc.metadata or {}
+            doc.metadata["source"] = source_value
+
         self.vectorstore.add_documents(new_splits)
-        self.loaded_books.append(path.name)
+        if hasattr(self.vectorstore, "persist"):
+            self.vectorstore.persist()
+        self.splits.extend(new_splits)
+        if path.name not in self.loaded_books:
+            self.loaded_books.append(path.name)
+        self._create_retrievers()
+        self._create_chains()
+        self._create_graph()
         self.log(f"[Готово] Добавлено {len(new_splits)} чанков из «{path.name}».")
 
     def ask(self, question: str, mode: str = "auto") -> str:
@@ -950,7 +1191,5 @@ class PageOracleBackend:
         self.append_assistant_message(answer)
         return answer
 
-
-# ═══════════════════════ CLI (обратная совместимость) ═════════════════
 if __name__ == "__main__":
     PageOracleBackend().initialize()
