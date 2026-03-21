@@ -8,3 +8,4 @@ chromadb
 langchain-deepseek
 langchain-openai
 langchain
+sentence-transformers
