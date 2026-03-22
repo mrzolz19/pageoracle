@@ -868,9 +868,11 @@ class PageOracleApp:
 		sys.stdout = self._orig_stdout
 		self.window.destroy()
 
+
 def main() -> None:
 	app = PageOracleApp()
 	app.run()
+
 
 if __name__ == "__main__":
 	main()
