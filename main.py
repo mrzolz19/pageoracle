@@ -6,7 +6,8 @@ import gc
 from pathlib import Path
 from datetime import datetime
 from typing import Any
-from typing import TypedDict, Literal, cast
+from typing import TypedDict, Literal, cast, Annotated
+from pydantic import BaseModel, Field
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
@@ -18,11 +19,14 @@ from langchain_community.retrievers import BM25Retriever
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableLambda
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langchain_core.retrievers import BaseRetriever
+from langchain.tools import tool
 from sentence_transformers import CrossEncoder
 import hashlib
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode, tools_condition
 
 
 RETRIEVER_K = 20
@@ -271,21 +275,50 @@ QUOTE_PROMPT = ChatPromptTemplate.from_messages(
     ]
 )
 
+GRADE_PROMPT = (
+    "Ты проверяешь релевантность найденного контекста вопросу пользователя.\\n"
+    "Вопрос:\\n{question}\\n\\n"
+    "Контекст:\\n{context}\\n\\n"
+    "Верни binary_score=yes, если контекст действительно помогает ответить на вопрос, иначе no.\\n"
+    "Также определи answer_style: quote если нужен ответ в формате цитат, иначе analysis."
+)
+
+REWRITE_PROMPT = (
+    "Ты переписываешь запрос для поиска по книгам.\\n"
+    "Исходный вопрос:\\n{question}\\n\\n"
+    "Текущий поисковый запрос:\\n{query}\\n\\n"
+    "Верни только improved retrieval-запрос в поле rewritten_query. "
+    "Если улучшить нельзя, верни исходный query без изменений."
+)
+
 
 # ═══════════════════════ BACKEND CLASS ═══════════════════════════════
 
 class AgentState(TypedDict, total=False):
+    messages: Annotated[list[Any], add_messages]
     question: str
     history: list[Any]
-    mode: str
+    mode: Literal["auto", "analysis", "quote"]
+    force_answer_style: Literal["", "analysis", "quote"]
     route_decision: str
     answer_style: Literal["analysis", "quote"]
     retrieval_query: str
-    retrieved_docs: list[Any]
-    probe_max_score: float
-    context_text: str
-    clarification_needed: bool
+    rewrite_count: int
+    max_rewrites: int
     final_answer: str
+
+
+class GradeDecision(BaseModel):
+    binary_score: Literal["yes", "no"] = Field(
+        description="yes если контекст релевантен вопросу, иначе no"
+    )
+    answer_style: Literal["analysis", "quote"] = Field(
+        description="Предпочтительный стиль ответа по запросу: analysis или quote"
+    )
+
+
+class RewriteDecision(BaseModel):
+    rewritten_query: str = Field(default="", description="Новый поисковый запрос")
 
 class PrefixedEmbeddings(Embeddings):
     def __init__(self, base, query_prefix="", doc_prefix=""):
@@ -579,7 +612,6 @@ class PageOracleBackend:
         if not self.vectorstore or not self.splits:
             return
         if self.reranker is None:
-            # CrossEncoder тяжёлый: инициализируем один раз и переиспользуем.
             self.reranker = SimpleReranker("BAAI/bge-reranker-base")
 
         self.mmr_retriever = HybridRerankerRetriever(
@@ -728,36 +760,38 @@ class PageOracleBackend:
         )
 
     def _create_graph(self) -> None:
-        if (
-            not self.model
-            or not self.vectorstore
-            or not self.rag_chain
-            or not self.quote_chain
-        ):
+        if not self.model or not self.vectorstore:
             self.graph_app = None
             return
 
         workflow = StateGraph(AgentState)
-        workflow.add_node("analyze", self._node_analyze)
-        workflow.add_node("probe", self._node_probe_retrieval)
-        workflow.add_node("with_retrieval", self._node_answer_with_retrieval)
-        workflow.add_node("without_retrieval", self._node_answer_without_retrieval)
-        workflow.add_node("clarify", self._node_ask_clarification)
+        workflow.add_node("generate_query_or_respond", self._node_generate_query_or_respond)
+        workflow.add_node("retrieve", ToolNode([self._build_retrieve_tool()]))
+        workflow.add_node("rewrite_question", self._node_rewrite_question)
+        workflow.add_node("generate_analysis_answer", self._node_generate_analysis_answer)
+        workflow.add_node("generate_quote_answer", self._node_generate_quote_answer)
 
-        workflow.add_edge(START, "analyze")
-        workflow.add_edge("analyze", "probe")
+        workflow.add_edge(START, "generate_query_or_respond")
         workflow.add_conditional_edges(
-            "probe",
-            self._route_after_probe,
+            "generate_query_or_respond",
+            tools_condition,
             {
-                "with_retrieval": "with_retrieval",
-                "without_retrieval": "without_retrieval",
-                "clarify": "clarify",
+                "tools": "retrieve",
+                END: END,
             },
         )
-        workflow.add_edge("with_retrieval", END)
-        workflow.add_edge("without_retrieval", END)
-        workflow.add_edge("clarify", END)
+        workflow.add_conditional_edges(
+            "retrieve",
+            self._route_after_retrieve,
+            {
+                "rewrite_question": "rewrite_question",
+                "generate_analysis_answer": "generate_analysis_answer",
+                "generate_quote_answer": "generate_quote_answer",
+            },
+        )
+        workflow.add_edge("rewrite_question", "generate_query_or_respond")
+        workflow.add_edge("generate_analysis_answer", END)
+        workflow.add_edge("generate_quote_answer", END)
         self.graph_app = workflow.compile()
 
     # ── memory / history ────────────────────────────────────────────
@@ -884,87 +918,132 @@ class PageOracleBackend:
             signal in q for signal in book_signals
         )
 
-    def _refine_retrieval_query(self, question: str, history: list) -> str:
-        if not self.model:
-            return question
-        try:
-            reply = self.model.invoke(
-                [
-                    SystemMessage(
-                        content=(
-                            "Ты помощник по формулировке поискового запроса для ретривера по книгам. "
-                            "Верни одну короткую строку на русском без пояснений. "
-                            "Если переписывать не нужно, верни исходный вопрос."
-                        )
-                    ),
-                    *history[-6:],
-                    HumanMessage(
-                        content=f"Исходный вопрос: {question}\nСформулируй поисковый запрос:"
-                    ),
-                ]
+    def _build_retrieve_tool(self):
+        @tool
+        def retrieve(query: str) -> str:
+            """Ищет релевантные фрагменты в загруженных книгах."""
+            retriever = (
+                self.quote_retriever
+                if self._looks_like_quote_request(query)
+                else self.mmr_retriever
             )
-            text = _extract_text(getattr(reply, "content", "")).strip()
-            return text if text else question
-        except Exception:
-            return question
+            if not retriever:
+                return "Контекст пуст: ретривер не инициализирован."
+            docs = retriever.invoke(query)
+            if not docs:
+                return "Контекст пуст: ретривер не нашёл подходящих фрагментов."
+            return format_docs(cast(list[Document], docs))
 
-    def _node_analyze(self, state: AgentState) -> AgentState:
-        question = (state.get("question") or "").strip()
-        history = state.get("history", [])
+        return retrieve
 
-        if self._is_meta_question(question):
+    def _node_generate_query_or_respond(self, state: AgentState) -> AgentState:
+        model = self.model
+        if not model:
             return {
-                "question": question,
-                "history": history,
-                "route_decision": "direct",
-                "answer_style": "analysis",
-                "retrieval_query": question,
+                "final_answer": "[Ошибка] Модель не инициализирована.",
+                "route_decision": "error",
             }
 
-        answer_style = (
-            "quote" if self._looks_like_quote_request(question) else "analysis"
-        )
-        retrieval_query = self._refine_retrieval_query(question, history)
+        question = (state.get("question") or "").strip()
+        history = state.get("history", [])
+        messages = state.get("messages", [])
+        mode = state.get("mode", "auto")
+
+        if not messages:
+            system_parts = [
+                "Ты агент по книгам и текстам.",
+                "Сначала реши: ответить напрямую или вызвать инструмент retrieve для поиска контекста.",
+                "Если вопрос о содержании книг, почти всегда вызывай retrieve.",
+                "Если это вопрос о приложении/настройках/ошибках, отвечай напрямую без retrieve.",
+            ]
+            if mode == "analysis":
+                system_parts.append("Режим зафиксирован: analysis.")
+            elif mode == "quote":
+                system_parts.append("Режим зафиксирован: quote.")
+
+            messages = [
+                SystemMessage(content=" ".join(system_parts)),
+                *history[-8:],
+                HumanMessage(content=question),
+            ]
+
+        response = model.bind_tools([self._build_retrieve_tool()]).invoke(messages)
+        forced = cast(Literal["", "analysis", "quote"], state.get("force_answer_style", ""))
+        if forced in {"analysis", "quote"}:
+            style = forced
+        else:
+            style = "quote" if self._looks_like_quote_request(question) else "analysis"
+
         return {
-            "question": question,
-            "history": history,
-            "answer_style": answer_style,
-            "retrieval_query": retrieval_query,
-            "route_decision": "pending",
+            "messages": [response],
+            "answer_style": cast(Literal["analysis", "quote"], style),
+            "route_decision": "tool-or-direct",
+            "retrieval_query": state.get("retrieval_query", question) or question,
         }
 
-    def _node_probe_retrieval(self, state: AgentState) -> AgentState:
-        if state.get("route_decision") == "direct":
-            return state
+    def _route_after_retrieve(
+        self, state: AgentState
+    ) -> Literal[
+        "rewrite_question",
+        "generate_analysis_answer",
+        "generate_quote_answer",
+    ]:
+        model = self.model
+        if not model:
+            return "rewrite_question"
 
-        query = state.get("retrieval_query") or state.get("question") or ""
-        max_score = 0.0
-        docs = []
-        vectorstore = self.vectorstore
-        try:
-            if vectorstore:
-                pairs = vectorstore.similarity_search_with_relevance_scores(query, k=3)
-                docs = [doc for doc, _score in pairs]
-                if pairs:
-                    max_score = max(score for _, score in pairs)
-        except Exception as err:
-            self.log(f"[Router] Ошибка probe-retrieval: {err}")
-            docs = []
+        messages = state.get("messages", [])
+        tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
+        if not tool_messages:
+            return "rewrite_question"
 
-        state["retrieved_docs"] = docs
-        state["probe_max_score"] = max_score
-        state["context_text"] = format_docs(docs) if docs else ""
-        state["clarification_needed"] = (not docs) or (
-            max_score < max(0.35, self.score_threshold - 0.15)
+        question = (state.get("question") or "").strip()
+        context = _extract_text(tool_messages[-1].content).strip()
+        if not context or context.lower().startswith("контекст пуст"):
+            rewrite_count = int(state.get("rewrite_count", 0))
+            max_rewrites = int(state.get("max_rewrites", 2))
+            if rewrite_count < max_rewrites:
+                return "rewrite_question"
+
+            forced = state.get("force_answer_style", "")
+            if forced == "quote":
+                return "generate_quote_answer"
+            if forced == "analysis":
+                return "generate_analysis_answer"
+            return "generate_quote_answer" if self._looks_like_quote_request(question) else "generate_analysis_answer"
+
+        decision = model.with_structured_output(GradeDecision).invoke(
+            [
+                HumanMessage(
+                    content=GRADE_PROMPT.format(question=question, context=context)
+                )
+            ]
         )
-        return state
 
-    def _route_after_probe(self, state: AgentState) -> str:
-        if state.get("route_decision") == "direct":
-            return "without_retrieval"
-        if state.get("clarification_needed"):
-            return "clarify"
-        return "with_retrieval"
+        if decision.binary_score == "no":
+            rewrite_count = int(state.get("rewrite_count", 0))
+            max_rewrites = int(state.get("max_rewrites", 2))
+            if rewrite_count < max_rewrites:
+                return "rewrite_question"
+
+            forced = state.get("force_answer_style", "")
+            if forced == "quote":
+                return "generate_quote_answer"
+            if forced == "analysis":
+                return "generate_analysis_answer"
+            return "generate_quote_answer" if self._looks_like_quote_request(question) else "generate_analysis_answer"
+
+        forced = state.get("force_answer_style", "")
+        if forced == "quote":
+            return "generate_quote_answer"
+        if forced == "analysis":
+            return "generate_analysis_answer"
+
+        return (
+            "generate_quote_answer"
+            if decision.answer_style == "quote"
+            else "generate_analysis_answer"
+        )
 
     def _invoke_prompt_with_context(
         self,
@@ -988,89 +1067,72 @@ class PageOracleBackend:
         reply = model.invoke(messages)
         return _extract_text(getattr(reply, "content", ""))
 
-    def _node_answer_with_retrieval(self, state: AgentState) -> AgentState:
-        style = state.get("answer_style", "analysis")
+    def _node_generate_analysis_answer(self, state: AgentState) -> AgentState:
         question = state.get("question", "")
         history = state.get("history", [])
-        docs = state.get("retrieved_docs", [])
-        context_text = state.get("context_text", "")
-        if not context_text and docs:
-            context_text = format_docs(cast(list[Document], docs))
-
-        if style == "quote":
-            if not self.model:
-                return {
-                    "final_answer": "[Ошибка] Модель не инициализирована.",
-                    "route_decision": "error",
-                    "retrieval_query": state.get("retrieval_query", question),
-                }
-            answer = self._invoke_prompt_with_context(
-                QUOTE_PROMPT, question, history, context_text
-            )
-            route = "retrieval-quote"
-        else:
-            if not self.model:
-                return {
-                    "final_answer": "[Ошибка] Модель не инициализирована.",
-                    "route_decision": "error",
-                    "retrieval_query": state.get("retrieval_query", question),
-                }
-            answer = self._invoke_prompt_with_context(
-                ANALYSIS_PROMPT, question, history, context_text
-            )
-            route = "retrieval-analysis"
+        tool_messages = [m for m in state.get("messages", []) if isinstance(m, ToolMessage)]
+        context_text = _extract_text(tool_messages[-1].content) if tool_messages else ""
+        answer = self._invoke_prompt_with_context(
+            ANALYSIS_PROMPT, question, history, context_text
+        )
 
         return {
+            "messages": [AIMessage(content=answer)],
             "final_answer": answer,
-            "route_decision": route,
+            "route_decision": "retrieval-analysis",
             "retrieval_query": state.get("retrieval_query", question),
         }
 
-    def _node_answer_without_retrieval(self, state: AgentState) -> AgentState:
+    def _node_generate_quote_answer(self, state: AgentState) -> AgentState:
         question = state.get("question", "")
         history = state.get("history", [])
-        model = self.model
-        if not model:
+        tool_messages = [m for m in state.get("messages", []) if isinstance(m, ToolMessage)]
+        context_text = _extract_text(tool_messages[-1].content) if tool_messages else ""
+        if not self.model:
             return {
-                "final_answer": "Не удалось ответить без ретривера: модель не инициализирована.",
-                "route_decision": "direct",
+                "final_answer": "[Ошибка] Модель не инициализирована.",
+                "route_decision": "error",
                 "retrieval_query": state.get("retrieval_query", question),
             }
-        try:
-            reply = model.invoke(
-                [
-                    SystemMessage(
-                        content=(
-                            "Ответь кратко и по делу на русском языке. "
-                            "Если вопрос не относится к содержанию загруженных книг, объясни это прямо."
-                        )
-                    ),
-                    *history[-6:],
-                    HumanMessage(content=question),
-                ]
-            )
-            answer = _extract_text(getattr(reply, "content", ""))
-        except Exception:
-            answer = "Не удалось ответить без ретривера. Попробуйте переформулировать вопрос."
+        answer = self._invoke_prompt_with_context(
+            QUOTE_PROMPT, question, history, context_text
+        )
 
         return {
+            "messages": [AIMessage(content=answer)],
             "final_answer": answer,
-            "route_decision": "direct",
+            "route_decision": "retrieval-quote",
             "retrieval_query": state.get("retrieval_query", question),
         }
 
-    def _node_ask_clarification(self, state: AgentState) -> AgentState:
-        question = state.get("question", "")
-        retrieval_query = state.get("retrieval_query", question)
-        answer = (
-            "Мне нужно немного уточнить запрос, чтобы найти точные фрагменты.\n"
-            "Уточните, пожалуйста: книгу, героя, часть/главу или ключевую сцену, которую нужно разобрать.\n"
-            f"Текущий поисковый запрос: {retrieval_query}"
+    def _node_rewrite_question(self, state: AgentState) -> AgentState:
+        model = self.model
+        question = (state.get("question") or "").strip()
+        query = (state.get("retrieval_query") or question).strip()
+        rewrite_count = int(state.get("rewrite_count", 0))
+
+        if not model:
+            return {
+                "messages": [HumanMessage(content=query or question)],
+                "retrieval_query": query or question,
+                "rewrite_count": rewrite_count + 1,
+                "route_decision": "rewrite",
+            }
+
+        decision = model.with_structured_output(RewriteDecision).invoke(
+            [
+                HumanMessage(
+                    content=REWRITE_PROMPT.format(question=question, query=query)
+                )
+            ]
         )
+
+        rewritten_query = decision.rewritten_query.strip() or query or question
         return {
-            "final_answer": answer,
-            "route_decision": "clarify",
-            "retrieval_query": retrieval_query,
+            "messages": [HumanMessage(content=rewritten_query)],
+            "retrieval_query": rewritten_query,
+            "rewrite_count": rewrite_count + 1,
+            "route_decision": "rewrite",
         }
 
     def get_last_debug_info(self) -> dict:
@@ -1123,73 +1185,57 @@ class PageOracleBackend:
         if not question:
             return "[Ошибка] Вопрос пустой."
 
+        if mode not in {"auto", "analysis", "quote"}:
+            mode = "auto"
+
         history_messages = self.get_recent_history_for_prompt()
         self.last_manual_override = mode in {"analysis", "quote"}
         self.last_route_decision = "unknown"
         self.last_retrieval_query = question
 
-        if mode == "quote":
-            if not self.quote_chain:
-                return "[Ошибка] Система не инициализирована."
-            answer = self.quote_chain.invoke(
-                {"question": question, "history": history_messages}
-            )
-            self.last_route_decision = "manual-quote"
-            self.append_user_message(question)
-            self.append_assistant_message(answer)
-            return answer
-
-        if mode == "analysis":
-            if not self.rag_chain:
-                return "[Ошибка] Система не инициализирована."
-            answer = self.rag_chain.invoke(
-                {"question": question, "history": history_messages}
-            )
-            self.last_route_decision = "manual-analysis"
-            self.append_user_message(question)
-            self.append_assistant_message(answer)
-            return answer
-
-        if self.graph_app:
-            try:
-                state: AgentState = {
-                    "question": question,
-                    "history": history_messages,
-                    "mode": "auto",
-                }
-                result = self.graph_app.invoke(state)
-                answer = (
-                    result.get("final_answer", "") if isinstance(result, dict) else ""
-                )
-                self.last_route_decision = (
-                    result.get("route_decision", "auto-unknown")
-                    if isinstance(result, dict)
-                    else "auto-unknown"
-                )
-                self.last_retrieval_query = (
-                    result.get("retrieval_query", question)
-                    if isinstance(result, dict)
-                    else question
-                )
-                if not answer:
-                    raise RuntimeError("Пустой ответ графа")
-                self.append_user_message(question)
-                self.append_assistant_message(answer)
-                return answer
-            except Exception as err:
-                self.log(
-                    f"[Router] Ошибка auto-routing: {err}. Переходим на fallback analysis."
-                )
-
-        if not self.rag_chain:
+        if not self.graph_app:
             return "[Ошибка] Система не инициализирована."
-        answer = self.rag_chain.invoke(
-            {"question": question, "history": history_messages}
-        )
-        self.last_route_decision = "fallback-analysis"
-        self.append_user_message(question)
-        self.append_assistant_message(answer)
-        return answer
+
+        try:
+            state: AgentState = {
+                "question": question,
+                "history": history_messages,
+                "messages": [],
+                "mode": cast(Literal["auto", "analysis", "quote"], mode),
+                "force_answer_style": (
+                    "" if mode == "auto" else cast(Literal["analysis", "quote"], mode)
+                ),
+                "answer_style": "analysis",
+                "retrieval_query": question,
+                "rewrite_count": 0,
+                "max_rewrites": 5,
+            }
+            result = self.graph_app.invoke(state)
+            answer = result.get("final_answer", "") if isinstance(result, dict) else ""
+            if not answer and isinstance(result, dict):
+                msgs = result.get("messages", [])
+                if msgs:
+                    answer = _extract_text(getattr(msgs[-1], "content", ""))
+
+            if not answer:
+                answer = "Не удалось получить ответ. Попробуйте переформулировать вопрос."
+
+            self.last_route_decision = (
+                result.get("route_decision", "auto-unknown")
+                if isinstance(result, dict)
+                else "auto-unknown"
+            )
+            self.last_retrieval_query = (
+                result.get("retrieval_query", question)
+                if isinstance(result, dict)
+                else question
+            )
+            self.append_user_message(question)
+            self.append_assistant_message(answer)
+            return answer
+        except Exception as err:
+            self.log(f"[Graph] Ошибка: {err}")
+            return "Внутренняя ошибка графа. Попробуйте повторить запрос."
 
 if __name__ == "__main__":
     PageOracleBackend().initialize()
