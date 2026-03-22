@@ -33,13 +33,13 @@ A0["Графический интерфейс PageOracle (пользовател
 2. [Пользовательский интерфейс (GUI)](README.md#пользовательский-интерфейс-gui)
 3. [Примеры работы](README.md#примеры-работы)
 
-[Глава II. Как работает PageOracle](README.md#глава-II.-как-работает-pageoracle)
+[Глава II. Как работает PageOracle](README.md#%D0%B3%D0%BB%D0%B0%D0%B2%D0%B0-ii-%D0%BA%D0%B0%D0%BA-%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D0%B0%D0%B5%D1%82-pageoracle)
 1. [Обработка и индексирование документов](README.md#%D0%B3%D0%BB%D0%B0%D0%B2%D0%B0-ii-%D0%BA%D0%B0%D0%BA-%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D0%B0%D0%B5%D1%82-pageoracle)
-2. [PageOracle Backend (движок искусственного интеллекта)](README.md#интеграция-и-настройка-больших-языковых-моделей)
-3. [Интеграция и настройка LLM](README.md#механизмы-поиска)
-4. [Управление историей чата](README.md#диалоговый-ии-агент-langgraph)
-5. [Гибридный поиск информации](README.md#история-чата-и-управление-контекстом)
-6. [Рабочий процесс ИИ-агента (LangGraph)]()
+2. [PageOracle Backend (движок искусственного интеллекта)](README.md#%D0%BE%D0%B1%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D0%BA%D0%B0-%D0%B8-%D0%B8%D0%BD%D0%B4%D0%B5%D0%BA%D1%81%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D0%B5-%D0%B4%D0%BE%D0%BA%D1%83%D0%BC%D0%B5%D0%BD%D1%82%D0%BE%D0%B2)
+3. [Интеграция и настройка LLM](README.md#pageoracle-backend-%D0%B4%D0%B2%D0%B8%D0%B6%D0%BE%D0%BA-%D0%B8%D1%81%D0%BA%D1%83%D1%81%D1%81%D1%82%D0%B2%D0%B5%D0%BD%D0%BD%D0%BE%D0%B3%D0%BE-%D0%B8%D0%BD%D1%82%D0%B5%D0%BB%D0%BB%D0%B5%D0%BA%D1%82%D0%B0)
+4. [Управление историей чата](README.md#%D0%B8%D0%BD%D1%82%D0%B5%D0%B3%D1%80%D0%B0%D1%86%D0%B8%D1%8F-%D0%B8-%D0%BD%D0%B0%D1%81%D1%82%D1%80%D0%BE%D0%B9%D0%BA%D0%B0-llm)
+5. [Гибридный поиск информации](README.md#%D1%83%D0%BF%D1%80%D0%B0%D0%B2%D0%BB%D0%B5%D0%BD%D0%B8%D0%B5-%D0%B8%D1%81%D1%82%D0%BE%D1%80%D0%B8%D0%B5%D0%B9-%D1%87%D0%B0%D1%82%D0%B0)
+6. [Рабочий процесс ИИ-агента (LangGraph)](README.md#%D1%80%D0%B0%D0%B1%D0%BE%D1%87%D0%B8%D0%B9-%D0%BF%D1%80%D0%BE%D1%86%D0%B5%D1%81%D1%81-%D0%B8%D0%B8-%D0%B0%D0%B3%D0%B5%D0%BD%D1%82%D0%B0-langgraph)
 
 ## Глава I. Работа с PageOracle
 ### Как пользоваться PageOracle
