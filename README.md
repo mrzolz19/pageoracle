@@ -2,6 +2,31 @@
 PageOracle — это настольное приложение на базе искусственного интеллекта, разработанное для того, чтобы помочь пользователям взаимодействовать с книгами. Оно позволяет загружать книги (в формате .txt), задавать вопросы об их содержании и получать интеллектуальные ответы, сгенерированные искусственным интеллектом. Система преобразует книги в базу знаний с возможностью поиска, интегрируется с различными большими языковыми моделями и управляет историей ваших диалогов с помощью интуитивно понятного ИИ-агента на основе графов и удобного графического интерфейса.
 
 ## Визуальный обзор: как работает система
+```mermaid
+flowchart TD
+    A0["PageOracle GUI (User Interface)
+"]
+    A1["PageOracle Backend (AI Engine)
+"]
+    A2["Document Processing & Indexing
+"]
+    A3["Hybrid Information Retrieval
+"]
+    A4["AI Agent Workflow (LangGraph)
+"]
+    A5["LLM Integration & Configuration
+"]
+    A6["Chat History Management
+"]
+    A0 -- "Commands" --> A1
+    A1 -- "Uses for processing" --> A2
+    A1 -- "Uses for retrieval" --> A3
+    A1 -- "Executes workflow" --> A4
+    A0 -- "Modifies settings" --> A5
+    A1 -- "Connects to LLMs" --> A5
+    A0 -- "Presents history" --> A6
+    A1 -- "Manages history data" --> A6
+```
 ![jggh](https://github.com/user-attachments/assets/8f2bb9c9-a65e-4b6a-9ca5-9a432982d477)
 
 ## Главы
