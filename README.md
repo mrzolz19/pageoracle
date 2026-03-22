@@ -4,31 +4,29 @@ PageOracle — это настольное приложение на базе и
 ## Визуальный обзор: как работает система
 ```mermaid
 flowchart TD
-    A0["PageOracle GUI (User Interface)
+A0["Графический интерфейс PageOracle (пользовательский интерфейс)
 "]
-    A1["PageOracle Backend (AI Engine)
+    A1["Серверная часть PageOracle (механизм искусственного интеллекта)
 "]
-    A2["Document Processing & Indexing
+    A2["Обработка и индексирование документов
 "]
-    A3["Hybrid Information Retrieval
+    A3["Гибридный поиск информации
 "]
-    A4["AI Agent Workflow (LangGraph)
+    A4["Рабочий процесс агента искусственного интеллекта (LangGraph)
 "]
-    A5["LLM Integration & Configuration
+    A5["Интеграция и настройка больших языковых моделей
 "]
-    A6["Chat History Management
+    A6["Управление историей чата
 "]
-    A0 -- "Commands" --> A1
-    A1 -- "Uses for processing" --> A2
-    A1 -- "Uses for retrieval" --> A3
-    A1 -- "Executes workflow" --> A4
-    A0 -- "Modifies settings" --> A5
-    A1 -- "Connects to LLMs" --> A5
-    A0 -- "Presents history" --> A6
-    A1 -- "Manages history data" --> A6
+    A0 -- "Команды" --> A1
+    A1 -- "Использование для обработки" --> A2
+    A1 -- "Использование для поиска" --> A3
+    A1 -- "Выполнение рабочего процесса" --> A4
+    A0 -- "Изменение настроек" --> A5
+    A1 -- "Подключение к большим языковым моделям" --> A5
+    A0 -- "Отображение истории" --> A6
+    A1 -- "Управление данными истории" --> A6
 ```
-![jggh](https://github.com/user-attachments/assets/8f2bb9c9-a65e-4b6a-9ca5-9a432982d477)
-
 ## Главы
 1. [Как пользоваться PageOracle](README.md#как-пользоваться-pageoracle)
 2. [Пользовательский интерфейс (GUI)](README.md#пользовательский-интерфейс-gui)
