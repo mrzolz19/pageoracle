@@ -76,11 +76,11 @@ python gui.py
  3. Embedding-модель - text-search-doc, nvidia/llama-nemotron-embed-vl-1b-v2:free (рекомендуется по умолчанию) - онлайн модели, но нужен [API ключ](https://openrouter.ai/workspaces/default/keys) OpenRouter или [API](https://aistudio.yandex.ru/platform) AIYandexStudio, BAAI/bge-m3 - локальная модель.
  4. API ключ от LLM - вставьте свой API ключ от LLM провайдера которого вы используете:
      [OpenRouter](https://openrouter.ai/workspaces/default/keys), 
-     [GigaChat](https://developers.sber.ru/studio/workspaces/) 
-     [Deepseek](https://platform.deepseek.com/api_keys)
-     [Google](https://aistudio.google.com/app/api-keys)
-     [Openai](https://platform.openai.com/)
-     [Anthropic](https://platform.claude.com/)
+     [GigaChat](https://developers.sber.ru/studio/workspaces/), 
+     [Deepseek](https://platform.deepseek.com/api_keys),
+     [Google](https://aistudio.google.com/app/api-keys),
+     [Openai](https://platform.openai.com/),
+     [Anthropic](https://platform.claude.com/),
      [Yandex](https://aistudio.yandex.ru/platform), также необходим индетификатор каталога, интструкция [тут](https://yandex.cloud/ru/docs/resource-manager/operations/folder/get-id)
  6. API ключ embedding-модели: см. пункт 4.
     
