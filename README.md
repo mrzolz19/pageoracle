@@ -78,7 +78,7 @@ python gui.py
 
  1. Провайдера ИИ: YandexGPT - рекомендуется по умолчанию, Deepseek, OpenAI, OpenRouter, Google, Anthropic, GigaChat
  2. LLM модель: yandexgpt-5.1/latest - рекомендуется по умолчанию. В зависимости от провайдера может быть deepseek-chat, gpt-5.4, gigachat-2 и т.д
- 3. Embedding-модель - text-search-doc, nvidia/llama-nemotron-embed-vl-1b-v2:free (рекомендуется по умолчанию) - онлайн модели, но нужен [API ключ](https://openrouter.ai/workspaces/default/keys) OpenRouter или [API](https://aistudio.yandex.ru/platform) AIYandexStudio, BAAI/bge-m3 - локальная модель.
+ 3. Embedding-модель - text-search-doc, nvidia/llama-nemotron-embed-vl-1b-v2:free (рекомендуется по умолчанию) - онлайн модели, но нужен [API ключ](https://openrouter.ai/workspaces/default/keys) OpenRouter для nvidia/llama-nemotron-embed-vl-1b-v2:free или [API](https://aistudio.yandex.ru/platform) AIYandexStudio для text-search-doc, BAAI/bge-m3 - локальная модель.
  4. API ключ от LLM - вставьте свой API ключ от LLM провайдера которого вы используете:
      [OpenRouter](https://openrouter.ai/workspaces/default/keys), 
      [GigaChat](https://developers.sber.ru/studio/workspaces/), 
