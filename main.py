@@ -813,8 +813,8 @@ class PageOracleBackend:
     # ── инициализация ────────────────────────────────────────────────
     def initialize(
         self,
-        provider="GigaChat",
-        model_name="gigachat-2",
+        provider="YandexGPT",
+        model_name="yandexgpt-5.1/latest",
         llm_api_key: str = "",
         embedding_api_key: str = "",
         api_key: str = "",
