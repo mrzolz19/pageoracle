@@ -43,7 +43,7 @@ A0["Графический интерфейс PageOracle (пользовател
 
 ## Глава I. Работа с PageOracle
 ### Как пользоваться PageOracle
-#### Запуск PageOracle
+#### Настройка и запуск PageOracle
 1. Клонируете репозиторий или скачайте с сайта Github репозитория и перейдите в папку с программой:
 ![settings](https://github.com/user-attachments/assets/173b51d8-45e3-4250-8692-e826b9a6543a)
 ```bash
@@ -67,6 +67,22 @@ pip install -r requirements.txt
 ```
 python gui.py
 ```
+5. Зайдите в настройки и выберите:
+<img width="1474" height="886" alt="Где находятся настройки" src="https://github.com/user-attachments/assets/d8cd1882-8e85-4054-8653-419e2f0f242c" />
+
+    1. Провайдера ИИ: YandexGPT - рекомендуется по умолчанию, Deepseek, OpenAI, OpenRouter, Google, Anthropic, GigaChat
+    2. LLM модель: yandexgpt-5.1/latest - рекомендуется по умолчанию. В зависимости от провайдера может быть deepseek-chat, gpt-5.4, gigachat-2 и т.д
+    3. Embedding-модель - text-search-doc, nvidia/llama-nemotron-embed-vl-1b-v2:free (рекомендуется по умолчанию) - онлайн модели, но нужен [API ключ](https://openrouter.ai/workspaces/default/keys) OpenRouter или [API](https://aistudio.yandex.ru/platform) AIYandexStudio, BAAI/bge-m3 - локальная модель.
+    4. API ключ от LLM - вставьте свой API ключ от LLM провайдера которого вы используете:
+    [OpenRouter](https://openrouter.ai/workspaces/default/keys), 
+    [GigaChat](https://developers.sber.ru/studio/workspaces/) 
+    [Deepseek](https://platform.deepseek.com/api_keys)
+    [Google](https://aistudio.google.com/app/api-keys)
+    [Openai](https://platform.openai.com/)
+    [Anthropic](https://platform.claude.com/)
+    [Yandex](https://aistudio.yandex.ru/platform), также необходим индетификатор каталога, интструкция [тут](https://yandex.cloud/ru/docs/resource-manager/operations/folder/get-id)
+    6. API ключ embedding-модели: см. пункт 4.
+    
 5. Принудительно выберите режим работы при необходимости:
 
 - "Авто": автоматически выбирает в зависимости от запроса пользователя между "Анализом" и "Поиском цитат";
