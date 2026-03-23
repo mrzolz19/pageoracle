@@ -3,6 +3,8 @@ import json
 import shutil
 import importlib
 import gc
+import time
+import threading
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -47,6 +49,11 @@ EMBEDDING_MODELS = {
         "query_prefix": "search_query: ",
         "doc_prefix": "search_document: ",
     },
+    "text-search-doc/latest": {
+        "provider": "yandex",
+        "query_prefix": "",
+        "doc_prefix": "",
+    },
 }
 DEFAULT_EMBEDDING_MODEL = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
 
@@ -85,18 +92,6 @@ PROVIDERS = {
             "gemini-3.1-flash-lite-preview",
         ],
     },
-    "Mistral": {
-        "class": "ChatMistralAI",
-        "package": "langchain_mistralai",
-        "env_key": "MISTRAL_API_KEY",
-        "models": ["mistral-large-latest", "mistral-small-latest"],
-    },
-    "Groq": {
-        "class": "ChatGroq",
-        "package": "langchain_groq",
-        "env_key": "GROQ_API_KEY",
-        "models": ["llama3-70b-8192", "mixtral-8x7b-32768"],
-    },
     "OpenRouter": {
         "class": "ChatOpenRouter",
         "package": "langchain_openrouter",
@@ -108,13 +103,24 @@ PROVIDERS = {
             "arcee-ai/trinity-large-preview:free",
         ],
     },
-
+    "YandexGPT": {
+        "class": "ChatYandexGPT",
+        "package": "langchain_community.chat_models",
+        "env_key": "YC_API_KEY",
+        "models": [
+            "aliceai-llm/latest",
+            "deepseek-v32/latest",
+            "yandexgpt-5.1/latest",
+            "yandexgpt-5-pro/latest",
+            "yandexgpt-5-lite/latest",
+        ],
+    },
     "GigaChat": {
         "class": "GigaChat",
         "package": "langchain_gigachat",
         "env_key": "GIGACHAT_CREDENTIALS",
         "verify_ssl_certs": False,
-        "models": ["gigachat-2"]
+        "models": ["gigachat-2", "gigachat-2-pro", "gigachat-2-max"],
     }
 }
 
@@ -391,6 +397,48 @@ class PrefixedEmbeddings(Embeddings):
         return self.base.embed_query(self.query_prefix + text)
 
 
+class RateLimitedEmbeddings(Embeddings):
+    def __init__(
+        self,
+        base: Embeddings,
+        requests_per_second: float,
+        embed_documents_batch_size: int = 1,
+    ):
+        self.base = base
+        self.requests_per_second = max(float(requests_per_second), 0.1)
+        self.min_interval = 1.0 / self.requests_per_second
+        self.embed_documents_batch_size = max(int(embed_documents_batch_size), 1)
+        self._lock = threading.Lock()
+        self._next_allowed_ts = 0.0
+
+    def _throttle(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            wait_for = self._next_allowed_ts - now
+            if wait_for > 0:
+                time.sleep(wait_for)
+                now = time.monotonic()
+            self._next_allowed_ts = now + self.min_interval
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+
+        vectors: list[list[float]] = []
+        batch_size = self.embed_documents_batch_size
+        for start in range(0, len(texts), batch_size):
+            self._throttle()
+            batch = texts[start : start + batch_size]
+            batch_vectors = self.base.embed_documents(batch)
+            vectors.extend(batch_vectors)
+
+        return vectors
+
+    def embed_query(self, text: str) -> list[float]:
+        self._throttle()
+        return self.base.embed_query(text)
+
+
 class OpenRouterEmbeddings(Embeddings):
     def __init__(self, model_name: str, api_key: str):
         self.model_name = model_name
@@ -585,6 +633,7 @@ class PageOracleBackend:
         self.model_supports_tools = True
         self.model_supports_structured_output = True
         self.embedding_model_name = DEFAULT_EMBEDDING_MODEL
+        self.provider_name = ""
 
     def _build_fallback_retrieve_response(self, query: str) -> AIMessage:
         # Унифицируем fallback-вызов retrieve, когда bind_tools недоступен.
@@ -599,6 +648,45 @@ class PageOracleBackend:
                 }
             ],
         )
+
+    def _should_use_retrieve_without_tools(
+        self,
+        question: str,
+        mode: Literal["auto", "analysis", "quote"],
+    ) -> bool:
+        if mode in {"analysis", "quote"}:
+            return True
+
+        if self._looks_like_quote_request(question):
+            return True
+
+        model = self.model
+        if not model:
+            return True
+
+        # В режиме без tools просим модель явно выбрать маршрут.
+        routing_messages = [
+            SystemMessage(
+                content=(
+                    "Ты роутер запросов. Верни только одно слово: RETRIEVE или DIRECT. "
+                    "RETRIEVE — если вопрос требует поиска в книгах/документах. "
+                    "DIRECT — если можно ответить без поиска по книгам (чат, настройки, приложение)."
+                )
+            ),
+            HumanMessage(content=question),
+        ]
+        try:
+            reply = model.invoke(routing_messages)
+            decision = _extract_text(getattr(reply, "content", "")).strip().upper()
+        except Exception as err:
+            self.log(f"[Router] Не удалось получить решение DIRECT/RETRIEVE: {err}")
+            return True
+
+        if "DIRECT" in decision and "RETRIEVE" not in decision:
+            return False
+        if "RETRIEVE" in decision:
+            return True
+        return True
 
     def _is_dimension_mismatch_error(self, err: Exception) -> bool:
         msg = str(err).lower()
@@ -668,6 +756,30 @@ class PageOracleBackend:
             )
         elif provider == "huggingface":
             base_emb = HuggingFaceEmbeddings(model_name=model_name)
+        elif provider == "yandex":
+            if resolved_api_key:
+                os.environ["YC_API_KEY"] = resolved_api_key
+
+            folder_id = os.getenv("YC_FOLDER_ID", "").strip()
+            module = importlib.import_module("langchain_community.embeddings.yandex")
+            yandex_embeddings_class = getattr(module, "YandexGPTEmbeddings")
+
+            yandex_kwargs: dict[str, Any] = {
+                "model_uri": self._build_yandex_embedding_uri(model_name, folder_id),
+            }
+            if folder_id:
+                yandex_kwargs["folder_id"] = folder_id
+            if resolved_api_key:
+                yandex_kwargs["api_key"] = resolved_api_key
+
+            yandex_base_emb = yandex_embeddings_class(**yandex_kwargs)
+            # У Yandex Cloud жёсткий лимит 10 req/s на embeddings,
+            # поэтому ограничиваем частоту чуть ниже лимита.
+            base_emb = RateLimitedEmbeddings(
+                base=yandex_base_emb,
+                requests_per_second=8.0,
+                embed_documents_batch_size=1,
+            )
         else:
             raise ValueError(f"Неизвестный embedding provider: {provider}")
 
@@ -678,11 +790,31 @@ class PageOracleBackend:
             doc_prefix=doc_prefix,
         )
 
+    def _build_yandex_model_uri(self, model_name: str, folder_id: str) -> str:
+        raw_name = model_name.strip()
+        if not raw_name:
+            raw_name = "yandexgpt-lite/latest"
+        if "://" in raw_name:
+            return raw_name
+        if folder_id:
+            return f"gpt://{folder_id}/{raw_name}"
+        return raw_name
+
+    def _build_yandex_embedding_uri(self, model_name: str, folder_id: str) -> str:
+        raw_name = model_name.strip()
+        if not raw_name:
+            raw_name = "text-search-doc-1.0/latest"
+        if "://" in raw_name:
+            return raw_name
+        if folder_id:
+            return f"emb://{folder_id}/{raw_name}"
+        return raw_name
+
     # ── инициализация ────────────────────────────────────────────────
     def initialize(
         self,
-        provider="DeepSeek",
-        model_name="deepseek-chat",
+        provider="GigaChat",
+        model_name="gigachat-2",
         llm_api_key: str = "",
         embedding_api_key: str = "",
         api_key: str = "",
@@ -972,8 +1104,9 @@ class PageOracleBackend:
             self.temperature = temperature
             self.max_tokens = max_tokens
             self.top_p = top_p
-            self.model_supports_tools = provider_name != "HuggingFace"
-            self.model_supports_structured_output = provider_name != "HuggingFace"
+            self.provider_name = provider_name
+            self.model_supports_tools = True
+            self.model_supports_structured_output = True
 
             module = importlib.import_module(cfg["package"])
             model_class = getattr(module, cfg["class"])
@@ -984,13 +1117,25 @@ class PageOracleBackend:
                     cfg.get("verify_ssl_certs", False)
                 )
 
-            common_kwargs = {
-                "model": model_name,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "top_p": top_p,
-                **provider_kwargs,
-            }
+            if provider_name == "YandexGPT":
+                folder_id = os.getenv("YC_FOLDER_ID", "").strip()
+                common_kwargs = {
+                    "model_uri": self._build_yandex_model_uri(model_name, folder_id),
+                    "temperature": temperature,
+                    **provider_kwargs,
+                }
+                if folder_id:
+                    common_kwargs["folder_id"] = folder_id
+                if api_key.strip():
+                    common_kwargs["api_key"] = api_key.strip()
+            else:
+                common_kwargs = {
+                    "model": model_name,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "top_p": top_p,
+                    **provider_kwargs,
+                }
 
             # По документации LangChain для OpenRouter используем выделенный
             # провайдер ChatOpenRouter (langchain_openrouter)
@@ -1005,20 +1150,39 @@ class PageOracleBackend:
             try:
                 self.model = model_class(**common_kwargs)
             except TypeError:
-                # Fallback для моделей с неполной поддержкой kwargs.
-                try:
-                    self.model = model_class(
-                        model=model_name,
-                        temperature=temperature,
-                        top_p=top_p,
+                if provider_name == "YandexGPT":
+                    folder_id = os.getenv("YC_FOLDER_ID", "").strip()
+                    minimal_kwargs: dict[str, Any] = {
+                        "model_uri": self._build_yandex_model_uri(model_name, folder_id),
                         **provider_kwargs,
-                    )
-                except TypeError:
-                    self.model = model_class(
-                        model=model_name,
-                        temperature=temperature,
-                        **provider_kwargs,
-                    )
+                    }
+                    if folder_id:
+                        minimal_kwargs["folder_id"] = folder_id
+                    if api_key.strip():
+                        minimal_kwargs["api_key"] = api_key.strip()
+                    self.model = model_class(**minimal_kwargs)
+                else:
+                    # Fallback для моделей с неполной поддержкой kwargs.
+                    try:
+                        self.model = model_class(
+                            model=model_name,
+                            temperature=temperature,
+                            top_p=top_p,
+                            **provider_kwargs,
+                        )
+                    except TypeError:
+                        self.model = model_class(
+                            model=model_name,
+                            temperature=temperature,
+                            **provider_kwargs,
+                        )
+
+            if provider_name == "YandexGPT":
+                # ChatYandexGPT в langchain_community не реализует bind_tools / with_structured_output.
+                # Явно включаем совместимый fallback-режим, чтобы не пытаться вызывать
+                # неподдерживаемые API и не зашумлять логи ошибками.
+                self.model_supports_tools = False
+                self.model_supports_structured_output = False
 
             self._create_chains()
             self._create_graph()
@@ -1271,9 +1435,15 @@ class PageOracleBackend:
             except Exception as err:
                 self.log(f"[Tools] bind_tools недоступен, fallback: {err}")
                 self.model_supports_tools = False
-                response = self._build_fallback_retrieve_response(retrieval_query)
+                if self._should_use_retrieve_without_tools(question, cast(Literal["auto", "analysis", "quote"], mode)):
+                    response = self._build_fallback_retrieve_response(retrieval_query)
+                else:
+                    response = model.invoke(messages)
         else:
-            response = self._build_fallback_retrieve_response(retrieval_query)
+            if self._should_use_retrieve_without_tools(question, cast(Literal["auto", "analysis", "quote"], mode)):
+                response = self._build_fallback_retrieve_response(retrieval_query)
+            else:
+                response = model.invoke(messages)
         forced = cast(Literal["", "analysis", "quote"], state.get("force_answer_style", ""))
         if forced in {"analysis", "quote"}:
             style = forced
