@@ -1,8 +1,6 @@
 """
 PageOracle GUI (Tkinter-Designer style layout)
-Интерфейс в стиле Tkinter-Designer:
 - Canvas как основа лейаута
-- Точное позиционирование блоков по Figma-структуре
 - Привязка к backend из main.py
 """
 from __future__ import annotations
@@ -16,10 +14,12 @@ from pathlib import Path
 from tkinter import (
 	END,
 	NORMAL,
+	TclError,
 	WORD,
 	Button,
 	Canvas,
 	Entry,
+	Menu,
 	StringVar,
 	Text,
 	Tk,
@@ -52,6 +52,10 @@ SUCCESS = "#4CAF50"
 ERROR = "#FF6B6B"
 LOG_BG = "#1A1A28"
 INPUT_PLACEHOLDER = "Задайте вопрос по загруженным книгам…"
+EMBEDDING_OPTIONS = [
+	"nvidia/llama-nemotron-embed-vl-1b-v2:free",
+	"BAAI/bge-m3",
+]
 
 
 class TextRedirector(io.TextIOBase):
@@ -75,7 +79,9 @@ def load_settings() -> dict:
 	defaults = {
 		"provider": "DeepSeek",
 		"model": "deepseek-chat",
-		"api_key": "",
+		"embedding_model": "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+		"llm_api_key": "",
+		"embedding_api_key": "",
 		"temperature": 0.3,
 		"max_tokens": 2048,
 		"top_p": 0.8,
@@ -85,6 +91,10 @@ def load_settings() -> dict:
 		try:
 			with open(SETTINGS_FILE, "r", encoding="utf-8") as file:
 				payload = json.load(file)
+			legacy_api_key = str(payload.get("api_key", "")).strip()
+			if legacy_api_key:
+				payload.setdefault("llm_api_key", legacy_api_key)
+				payload.setdefault("embedding_api_key", legacy_api_key)
 			defaults.update(payload)
 		except Exception:
 			pass
@@ -101,7 +111,7 @@ class SettingsWindow:
 		self.providers = providers
 		self.on_save = on_save
 		win_width = 560
-		win_height = 640
+		win_height = 760
 
 		self.win = Toplevel(parent)
 		self.win.title("PageOracle - Настройки")
@@ -119,7 +129,7 @@ class SettingsWindow:
 		canvas = Canvas(self.win, bg=BG, width=win_width, height=win_height, bd=0, highlightthickness=0)
 		canvas.place(x=0, y=0)
 
-		canvas.create_rectangle(16, 16, 544, 624, fill=BG, outline=BORDER, width=1)
+		canvas.create_rectangle(16, 16, 544, 744, fill=BG, outline=BORDER, width=1)
 		canvas.create_text(34, 40, anchor="nw", text="⚙ Настройки", fill=TEXT_PRI, font=("Segoe UI", 18, "bold"))
 
 		canvas.create_text(34, 92, anchor="nw", text="Провайдер ИИ", fill=TEXT_SEC, font=("Segoe UI", 11))
@@ -134,14 +144,25 @@ class SettingsWindow:
 		self.provider_cb.place(x=34, y=116, width=492, height=36)
 		self.provider_cb.bind("<<ComboboxSelected>>", self._on_provider_change)
 
-		canvas.create_text(34, 176, anchor="nw", text="Модель", fill=TEXT_SEC, font=("Segoe UI", 11))
+		canvas.create_text(34, 176, anchor="nw", text="LLM Модель", fill=TEXT_SEC, font=("Segoe UI", 11))
 		self.model_var = StringVar(value=current.get("model", "deepseek-chat"))
 		self.model_cb = ttk.Combobox(self.win, textvariable=self.model_var, font=("Segoe UI", 11), state="readonly")
 		self._update_model_list()
 		self.model_cb.place(x=34, y=200, width=492, height=36)
 
-		canvas.create_text(34, 260, anchor="nw", text="API Ключ", fill=TEXT_SEC, font=("Segoe UI", 11))
-		self.api_entry = Entry(
+		canvas.create_text(34, 260, anchor="nw", text="Embedding модель", fill=TEXT_SEC, font=("Segoe UI", 11))
+		self.embedding_var = StringVar(value=current.get("embedding_model", EMBEDDING_OPTIONS[0]))
+		self.embedding_cb = ttk.Combobox(
+			self.win,
+			textvariable=self.embedding_var,
+			values=EMBEDDING_OPTIONS,
+			state="readonly",
+			font=("Segoe UI", 11),
+		)
+		self.embedding_cb.place(x=34, y=284, width=492, height=36)
+
+		canvas.create_text(34, 344, anchor="nw", text="API Ключ LLM", fill=TEXT_SEC, font=("Segoe UI", 11))
+		self.llm_api_entry = Entry(
 			self.win,
 			font=("Segoe UI", 11),
 			show="*",
@@ -151,19 +172,33 @@ class SettingsWindow:
 			relief="flat",
 			bd=0,
 		)
-		self.api_entry.place(x=34, y=284, width=492, height=36)
-		self.api_entry.insert(0, current.get("api_key", ""))
+		self.llm_api_entry.place(x=34, y=368, width=492, height=36)
+		self.llm_api_entry.insert(0, current.get("llm_api_key", ""))
+
+		canvas.create_text(34, 428, anchor="nw", text="API Ключ Embedding", fill=TEXT_SEC, font=("Segoe UI", 11))
+		self.embedding_api_entry = Entry(
+			self.win,
+			font=("Segoe UI", 11),
+			show="*",
+			bg=INPUT_BG,
+			fg=TEXT_PRI,
+			insertbackground=TEXT_PRI,
+			relief="flat",
+			bd=0,
+		)
+		self.embedding_api_entry.place(x=34, y=452, width=492, height=36)
+		self.embedding_api_entry.insert(0, current.get("embedding_api_key", ""))
 
 		self.show_var = StringVar(value="0")
 		show_btn = ttk.Checkbutton(
 			self.win,
-			text="Показать ключ",
+			text="Показать ключи",
 			variable=self.show_var,
 			command=self._toggle_key,
 		)
-		show_btn.place(x=34, y=326)
+		show_btn.place(x=34, y=494)
 
-		canvas.create_text(34, 364, anchor="nw", text="Temperature", fill=TEXT_SEC, font=("Segoe UI", 11))
+		canvas.create_text(34, 532, anchor="nw", text="Temperature", fill=TEXT_SEC, font=("Segoe UI", 11))
 		self.temperature_entry = Entry(
 			self.win,
 			font=("Segoe UI", 11),
@@ -173,10 +208,10 @@ class SettingsWindow:
 			relief="flat",
 			bd=0,
 		)
-		self.temperature_entry.place(x=34, y=388, width=236, height=36)
+		self.temperature_entry.place(x=34, y=556, width=236, height=36)
 		self.temperature_entry.insert(0, str(current.get("temperature", 0.3)))
 
-		canvas.create_text(290, 364, anchor="nw", text="Max Tokens", fill=TEXT_SEC, font=("Segoe UI", 11))
+		canvas.create_text(290, 532, anchor="nw", text="Max Tokens", fill=TEXT_SEC, font=("Segoe UI", 11))
 		self.max_tokens_entry = Entry(
 			self.win,
 			font=("Segoe UI", 11),
@@ -186,10 +221,10 @@ class SettingsWindow:
 			relief="flat",
 			bd=0,
 		)
-		self.max_tokens_entry.place(x=290, y=388, width=236, height=36)
+		self.max_tokens_entry.place(x=290, y=556, width=236, height=36)
 		self.max_tokens_entry.insert(0, str(current.get("max_tokens", 2048)))
 
-		canvas.create_text(34, 436, anchor="nw", text="Top P", fill=TEXT_SEC, font=("Segoe UI", 11))
+		canvas.create_text(34, 604, anchor="nw", text="Top P", fill=TEXT_SEC, font=("Segoe UI", 11))
 		self.top_p_entry = Entry(
 			self.win,
 			font=("Segoe UI", 11),
@@ -199,10 +234,10 @@ class SettingsWindow:
 			relief="flat",
 			bd=0,
 		)
-		self.top_p_entry.place(x=34, y=460, width=236, height=36)
+		self.top_p_entry.place(x=34, y=628, width=236, height=36)
 		self.top_p_entry.insert(0, str(current.get("top_p", 0.8)))
 
-		canvas.create_text(290, 436, anchor="nw", text="Score Threshold", fill=TEXT_SEC, font=("Segoe UI", 11))
+		canvas.create_text(290, 604, anchor="nw", text="Score Threshold", fill=TEXT_SEC, font=("Segoe UI", 11))
 		self.score_threshold_entry = Entry(
 			self.win,
 			font=("Segoe UI", 11),
@@ -212,7 +247,7 @@ class SettingsWindow:
 			relief="flat",
 			bd=0,
 		)
-		self.score_threshold_entry.place(x=290, y=460, width=236, height=36)
+		self.score_threshold_entry.place(x=290, y=628, width=236, height=36)
 		self.score_threshold_entry.insert(0, str(current.get("score_threshold", 0.6)))
 
 		cancel_btn = Button(
@@ -227,7 +262,7 @@ class SettingsWindow:
 			cursor="hand2",
 			font=("Segoe UI", 11),
 		)
-		cancel_btn.place(x=306, y=568, width=100, height=40)
+		cancel_btn.place(x=306, y=688, width=100, height=40)
 
 		save_btn = Button(
 			self.win,
@@ -241,10 +276,12 @@ class SettingsWindow:
 			cursor="hand2",
 			font=("Segoe UI", 11, "bold"),
 		)
-		save_btn.place(x=416, y=568, width=110, height=40)
+		save_btn.place(x=416, y=688, width=110, height=40)
 
 	def _toggle_key(self) -> None:
-		self.api_entry.configure(show="" if self.show_var.get() == "1" else "*")
+		mask = "" if self.show_var.get() == "1" else "*"
+		self.llm_api_entry.configure(show=mask)
+		self.embedding_api_entry.configure(show=mask)
 
 	def _on_provider_change(self, _evt=None) -> None:
 		self._update_model_list()
@@ -257,61 +294,87 @@ class SettingsWindow:
 			self.model_var.set(models[0])
 
 	def _save(self) -> None:
-		try:
-			temperature = float(self.temperature_entry.get().strip())
-		except ValueError:
-			messagebox.showwarning("Внимание", "Temperature должен быть числом.", parent=self.win)
+		temperature = self._read_float(self.temperature_entry, "Temperature", 0.0, 2.0)
+		if temperature is None:
 			return
 
-		if temperature < 0 or temperature > 2:
-			messagebox.showwarning("Внимание", "Temperature должен быть в диапазоне 0..2.", parent=self.win)
+		max_tokens = self._read_int(self.max_tokens_entry, "Max Tokens", 1)
+		if max_tokens is None:
 			return
 
-		try:
-			max_tokens = int(self.max_tokens_entry.get().strip())
-		except ValueError:
-			messagebox.showwarning("Внимание", "Max Tokens должен быть целым числом.", parent=self.win)
+		top_p = self._read_float(self.top_p_entry, "Top P", 0.0, 1.0)
+		if top_p is None:
 			return
 
-		if max_tokens < 1:
-			messagebox.showwarning("Внимание", "Max Tokens должен быть больше 0.", parent=self.win)
-			return
-
-		try:
-			top_p = float(self.top_p_entry.get().strip())
-		except ValueError:
-			messagebox.showwarning("Внимание", "Top P должен быть числом.", parent=self.win)
-			return
-
-		if top_p < 0 or top_p > 1:
-			messagebox.showwarning("Внимание", "Top P должен быть в диапазоне 0..1.", parent=self.win)
-			return
-
-		try:
-			score_threshold = float(self.score_threshold_entry.get().strip())
-		except ValueError:
-			messagebox.showwarning("Внимание", "Score Threshold должен быть числом.", parent=self.win)
-			return
-
-		if score_threshold < 0 or score_threshold > 1:
-			messagebox.showwarning("Внимание", "Score Threshold должен быть в диапазоне 0..1.", parent=self.win)
+		score_threshold = self._read_float(
+			self.score_threshold_entry,
+			"Score Threshold",
+			0.0,
+			1.0,
+		)
+		if score_threshold is None:
 			return
 
 		data = {
 			"provider": self.provider_var.get(),
 			"model": self.model_var.get(),
-			"api_key": self.api_entry.get().strip(),
+			"embedding_model": self.embedding_var.get(),
+			"llm_api_key": self.llm_api_entry.get().strip(),
+			"embedding_api_key": self.embedding_api_entry.get().strip(),
 			"temperature": temperature,
 			"max_tokens": max_tokens,
 			"top_p": top_p,
 			"score_threshold": score_threshold,
 		}
-		if not data["api_key"]:
-			messagebox.showwarning("Внимание", "Введите API ключ.", parent=self.win)
+		if not data["llm_api_key"]:
+			messagebox.showwarning("Внимание", "Введите API ключ LLM.", parent=self.win)
+			return
+		if data["embedding_model"] == "nvidia/llama-nemotron-embed-vl-1b-v2:free" and not data["embedding_api_key"]:
+			messagebox.showwarning("Внимание", "Введите API ключ Embedding для OpenRouter модели.", parent=self.win)
 			return
 		save_settings(data)
 		self.on_save(data)
 		self.win.destroy()
+
+	def _read_float(
+		self,
+		entry: Entry,
+		label: str,
+		min_value: float,
+		max_value: float,
+	) -> float | None:
+		raw = entry.get().strip()
+		try:
+			value = float(raw)
+		except ValueError:
+			messagebox.showwarning("Внимание", f"{label} должен быть числом.", parent=self.win)
+			return None
+
+		if value < min_value or value > max_value:
+			messagebox.showwarning(
+				"Внимание",
+				f"{label} должен быть в диапазоне {min_value:g}..{max_value:g}.",
+				parent=self.win,
+			)
+			return None
+		return value
+
+	def _read_int(self, entry: Entry, label: str, min_value: int) -> int | None:
+		raw = entry.get().strip()
+		try:
+			value = int(raw)
+		except ValueError:
+			messagebox.showwarning("Внимание", f"{label} должен быть целым числом.", parent=self.win)
+			return None
+
+		if value < min_value:
+			messagebox.showwarning(
+				"Внимание",
+				f"{label} должен быть больше или равен {min_value}.",
+				parent=self.win,
+			)
+			return None
+		return value
 
 
 class PageOracleApp:
@@ -331,6 +394,7 @@ class PageOracleApp:
 
 		self._setup_styles()
 		self._build_layout()
+		self._setup_text_editing()
 		self._redirect_stdout()
 		self._start_init()
 
@@ -417,9 +481,9 @@ class PageOracleApp:
 		self.canvas.create_rectangle(280, 0, 1200, 800, fill=BG, outline="")
 		self.canvas.create_text(304, 14, anchor="nw", text="Чат с книгой", fill=TEXT_PRI, font=("Segoe UI", 18, "bold"))
 
-		self.status_dot = self.canvas.create_oval(1065, 23, 1073, 31, fill=SECONDARY, outline="")
+		self.status_dot = self.canvas.create_oval(960, 23, 968, 31, fill=SECONDARY, outline="")
 		self.status_label = self.canvas.create_text(
-			1081,
+			976,
 			18,
 			anchor="nw",
 			text="Готов к работе",
@@ -565,7 +629,7 @@ class PageOracleApp:
 			command=self._on_clear_logs,
 			font=("Segoe UI", 9),
 		)
-		self.btn_clear_logs.place(x=1126, y=642, width=50, height=16)
+		self.btn_clear_logs.place(x=1123, y=642, width=50, height=16)
 
 		self.log_text = Text(
 			self.window,
@@ -594,6 +658,147 @@ class PageOracleApp:
 			"Добро пожаловать! Загрузите книгу (.txt) через боковую панель и задайте вопрос.",
 			is_ai=True,
 		)
+
+	def _setup_text_editing(self) -> None:
+		self._context_target = None
+		self.text_context_menu = Menu(self.window, tearoff=0)
+		self.text_context_menu.add_command(label="Отменить", command=lambda: self._context_action("undo"))
+		self.text_context_menu.add_command(label="Повторить", command=lambda: self._context_action("redo"))
+		self.text_context_menu.add_separator()
+		self.text_context_menu.add_command(label="Копировать", command=lambda: self._context_action("copy"))
+		self.text_context_menu.add_command(label="Вставить", command=lambda: self._context_action("paste"))
+		self.text_context_menu.add_command(label="Вырезать", command=lambda: self._context_action("cut"))
+		self.text_context_menu.add_command(label="Удалить", command=lambda: self._context_action("delete"))
+		self.text_context_menu.add_separator()
+		self.text_context_menu.add_command(label="Выделить всё", command=lambda: self._context_action("select_all"))
+
+		self.window.bind_all("<Control-c>", self._on_copy, add="+")
+		self.window.bind_all("<Control-C>", self._on_copy, add="+")
+		self.window.bind_all("<Control-v>", self._on_paste, add="+")
+		self.window.bind_all("<Control-V>", self._on_paste, add="+")
+		self.window.bind_all("<Control-x>", self._on_cut, add="+")
+		self.window.bind_all("<Control-X>", self._on_cut, add="+")
+		self.window.bind_all("<Control-a>", self._on_select_all, add="+")
+		self.window.bind_all("<Control-A>", self._on_select_all, add="+")
+		self.window.bind_all("<Control-z>", self._on_undo, add="+")
+		self.window.bind_all("<Control-Z>", self._on_undo, add="+")
+		self.window.bind_all("<Control-y>", self._on_redo, add="+")
+		self.window.bind_all("<Control-Y>", self._on_redo, add="+")
+
+		self.window.bind_all("<Button-3>", self._show_text_context_menu, add="+")
+
+	def _resolve_text_widget(self, event=None):
+		widget = getattr(event, "widget", None)
+		if isinstance(widget, (Entry, Text)):
+			return widget
+		focused = self.window.focus_get()
+		if isinstance(focused, (Entry, Text)):
+			return focused
+		return None
+
+	def _is_widget_editable(self, widget) -> bool:
+		try:
+			state = str(widget.cget("state"))
+		except Exception:
+			state = "normal"
+		return state not in {"disabled", "readonly"}
+
+	def _context_action(self, action: str) -> None:
+		widget = self._context_target
+		if not isinstance(widget, (Entry, Text)):
+			return
+
+		if action == "undo":
+			if self._is_widget_editable(widget):
+				widget.event_generate("<<Undo>>")
+		elif action == "redo":
+			if self._is_widget_editable(widget):
+				widget.event_generate("<<Redo>>")
+		elif action == "copy":
+			widget.event_generate("<<Copy>>")
+		elif action == "paste":
+			if self._is_widget_editable(widget):
+				widget.event_generate("<<Paste>>")
+		elif action == "cut":
+			if self._is_widget_editable(widget):
+				widget.event_generate("<<Cut>>")
+		elif action == "delete":
+			if self._is_widget_editable(widget):
+				widget.event_generate("<Delete>")
+		elif action == "select_all":
+			if isinstance(widget, Entry):
+				widget.selection_range(0, END)
+				widget.icursor(END)
+			else:
+				widget.tag_add("sel", "1.0", "end-1c")
+				widget.mark_set("insert", "end-1c")
+
+	def _show_text_context_menu(self, event):
+		widget = self._resolve_text_widget(event)
+		if not isinstance(widget, (Entry, Text)):
+			return
+
+		self._context_target = widget
+		widget.focus_set()
+		self.text_context_menu.tk_popup(event.x_root, event.y_root)
+		self.text_context_menu.grab_release()
+		return "break"
+
+	def _on_copy(self, event):
+		widget = self._resolve_text_widget(event)
+		if not isinstance(widget, (Entry, Text)):
+			return None
+		widget.event_generate("<<Copy>>")
+		return "break"
+
+	def _on_paste(self, event):
+		widget = self._resolve_text_widget(event)
+		if not isinstance(widget, (Entry, Text)):
+			return None
+		if not self._is_widget_editable(widget):
+			return "break"
+		widget.event_generate("<<Paste>>")
+		return "break"
+
+	def _on_cut(self, event):
+		widget = self._resolve_text_widget(event)
+		if not isinstance(widget, (Entry, Text)):
+			return None
+		if not self._is_widget_editable(widget):
+			return "break"
+		widget.event_generate("<<Cut>>")
+		return "break"
+
+	def _on_select_all(self, event):
+		widget = self._resolve_text_widget(event)
+		if not isinstance(widget, (Entry, Text)):
+			return None
+
+		if isinstance(widget, Entry):
+			widget.selection_range(0, END)
+			widget.icursor(END)
+		else:
+			widget.tag_add("sel", "1.0", "end-1c")
+			widget.mark_set("insert", "end-1c")
+		return "break"
+
+	def _on_undo(self, event):
+		widget = self._resolve_text_widget(event)
+		if not isinstance(widget, (Entry, Text)):
+			return None
+		if not self._is_widget_editable(widget):
+			return "break"
+		widget.event_generate("<<Undo>>")
+		return "break"
+
+	def _on_redo(self, event):
+		widget = self._resolve_text_widget(event)
+		if not isinstance(widget, (Entry, Text)):
+			return None
+		if not self._is_widget_editable(widget):
+			return "break"
+		widget.event_generate("<<Redo>>")
+		return "break"
 
 	def _redirect_stdout(self) -> None:
 		self._orig_stdout = sys.stdout
@@ -673,7 +878,11 @@ class PageOracleApp:
 
 	def _start_init(self) -> None:
 		self._set_status("Инициализация…", SECONDARY)
-		threading.Thread(target=self._init_worker, daemon=True).start()
+		self._run_in_thread(self._init_worker)
+
+	def _run_in_thread(self, target, *args) -> None:
+		# Единая точка запуска фоновых задач для UI-операций.
+		threading.Thread(target=target, args=args, daemon=True).start()
 
 	def _init_worker(self) -> None:
 		try:
@@ -681,7 +890,9 @@ class PageOracleApp:
 			self.backend.initialize(
 				provider=self.settings.get("provider", "DeepSeek"),
 				model_name=self.settings.get("model", "deepseek-chat"),
-				api_key=self.settings.get("api_key", ""),
+				llm_api_key=self.settings.get("llm_api_key", ""),
+				embedding_api_key=self.settings.get("embedding_api_key", ""),
+				embedding_model=self.settings.get("embedding_model", EMBEDDING_OPTIONS[0]),
 				temperature=float(self.settings.get("temperature", 0.3)),
 				max_tokens=int(self.settings.get("max_tokens", 2048)),
 				top_p=float(self.settings.get("top_p", 0.8)),
@@ -714,7 +925,7 @@ class PageOracleApp:
 			return
 
 		self._set_busy(True, "Загрузка книги…")
-		threading.Thread(target=self._load_book_worker, args=(file_path,), daemon=True).start()
+		self._run_in_thread(self._load_book_worker, file_path)
 
 	def _load_book_worker(self, file_path: str) -> None:
 		try:
@@ -742,7 +953,7 @@ class PageOracleApp:
 		self._show_thinking()
 		self._set_busy(True, "PageOracle думает…")
 
-		threading.Thread(target=self._ask_worker, args=(question, self.mode), daemon=True).start()
+		self._run_in_thread(self._ask_worker, question, self.mode)
 
 	def _show_thinking(self) -> None:
 		self.chat_text.configure(state=NORMAL)
@@ -825,20 +1036,24 @@ class PageOracleApp:
 		if not self.backend:
 			return
 		self._set_busy(True, "Переключение модели…")
-		threading.Thread(target=self._switch_model_worker, args=(new_settings,), daemon=True).start()
+		self._run_in_thread(self._switch_model_worker, new_settings)
 
 	def _switch_model_worker(self, settings: dict) -> None:
 		try:
 			if not self.backend:
 				return
+			embedding_model = settings.get("embedding_model", EMBEDDING_OPTIONS[0])
 			ok = self.backend.set_model(
 				settings["provider"],
 				settings["model"],
-				settings["api_key"],
+				settings.get("llm_api_key", ""),
 				temperature=float(settings.get("temperature", 0.3)),
 				max_tokens=int(settings.get("max_tokens", 2048)),
 				top_p=float(settings.get("top_p", 0.8)),
 			)
+			if ok and embedding_model != self.backend.embedding_model_name:
+				if not self.backend.set_embeddings(embedding_model, settings.get("embedding_api_key", "")):
+					ok = False
 			if ok and not self.backend.set_score_threshold(float(settings.get("score_threshold", 0.6))):
 				ok = False
 
@@ -847,6 +1062,7 @@ class PageOracleApp:
 					0,
 					self._append_log,
 					f"[Готово] Переключено на {settings['provider']} / {settings['model']} "
+					f"embedding={settings.get('embedding_model', EMBEDDING_OPTIONS[0])} "
 					f"(temperature={settings.get('temperature', 0.3)}, "
 					f"max_tokens={settings.get('max_tokens', 2048)}, "
 					f"top_p={settings.get('top_p', 0.8)}, "
@@ -865,7 +1081,12 @@ class PageOracleApp:
 		self.window.mainloop()
 
 	def _on_close(self) -> None:
-		sys.stdout = self._orig_stdout
+		if hasattr(self, "_orig_stdout"):
+			sys.stdout = self._orig_stdout
+		try:
+			self.text_context_menu.unpost()
+		except TclError:
+			pass
 		self.window.destroy()
 
 
