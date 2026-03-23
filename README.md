@@ -86,7 +86,7 @@ python gui.py
      [Google](https://aistudio.google.com/app/api-keys),
      [Openai](https://platform.openai.com/),
      [Anthropic](https://platform.claude.com/),
-     [Yandex](https://aistudio.yandex.ru/platform), также необходим индетификатор каталога, интструкция [тут](https://yandex.cloud/ru/docs/resource-manager/operations/folder/get-id)
+     для [Yandex](https://aistudio.yandex.ru/platform), также необходим индетификатор каталога, интструкция [тут](https://yandex.cloud/ru/docs/resource-manager/operations/folder/get-id)
  6. API ключ embedding-модели: см. пункт 3.
     
 5. Принудительно выберите режим работы при необходимости:
