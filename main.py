@@ -3,11 +3,13 @@ import json
 import shutil
 import importlib
 import gc
+import urllib.request
+import urllib.error
 from pathlib import Path
 from datetime import datetime
 from typing import Any
 from typing import TypedDict, Literal, cast, Annotated
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
@@ -29,9 +31,24 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
 
+
 RETRIEVER_K = 20
 RETRIEVER_FETCH_K = 50
-RERANK_TOP_K = 5
+RERANK_TOP_K = 7
+
+EMBEDDING_MODELS = {
+    "nvidia/llama-nemotron-embed-vl-1b-v2:free": {
+        "provider": "openrouter",
+        "query_prefix": "",
+        "doc_prefix": "",
+    },
+    "BAAI/bge-m3": {
+        "provider": "huggingface",
+        "query_prefix": "search_query: ",
+        "doc_prefix": "search_document: ",
+    },
+}
+DEFAULT_EMBEDDING_MODEL = "nvidia/llama-nemotron-embed-vl-1b-v2:free"
 
 # ───────────────────── провайдеры LLM (для GUI настроек) ─────────────
 PROVIDERS = {
@@ -39,7 +56,7 @@ PROVIDERS = {
         "class": "ChatDeepSeek",
         "package": "langchain_deepseek",
         "env_key": "DEEPSEEK_API_KEY",
-        "models": ["deepseek-chat", "deepseek-reasoner"],
+        "models": ["deepseek-chat"],
     },
     "OpenAI": {
         "class": "ChatOpenAI",
@@ -80,6 +97,25 @@ PROVIDERS = {
         "env_key": "GROQ_API_KEY",
         "models": ["llama3-70b-8192", "mixtral-8x7b-32768"],
     },
+    "OpenRouter": {
+        "class": "ChatOpenRouter",
+        "package": "langchain_openrouter",
+        "env_key": "OPENROUTER_API_KEY",
+        "models": [
+            "deepseek/deepseek-chat",
+            "qwen/qwen3-235b-a22b",
+            "stepfun/step-3.5-flash:free",
+            "arcee-ai/trinity-large-preview:free",
+        ],
+    },
+
+    "GigaChat": {
+        "class": "GigaChat",
+        "package": "langchain_gigachat",
+        "env_key": "GIGACHAT_CREDENTIALS",
+        "verify_ssl_certs": False,
+        "models": ["gigachat-2"]
+    }
 }
 
 # ───────────────────────── парсинг структуры книги ───────────────────
@@ -309,6 +345,17 @@ class AgentState(TypedDict, total=False):
 
 
 class GradeDecision(BaseModel):
+    """Структурированный результат проверки релевантности контекста и стиля ответа."""
+
+    model_config = ConfigDict(
+        title="grade_decision",
+        json_schema_extra={
+            "description": (
+                "Решение о релевантности контекста вопросу и рекомендуемом стиле ответа."
+            )
+        },
+    )
+
     binary_score: Literal["yes", "no"] = Field(
         description="yes если контекст релевантен вопросу, иначе no"
     )
@@ -318,6 +365,17 @@ class GradeDecision(BaseModel):
 
 
 class RewriteDecision(BaseModel):
+    """Структурированный результат переписывания поискового запроса."""
+
+    model_config = ConfigDict(
+        title="rewrite_decision",
+        json_schema_extra={
+            "description": (
+                "Результат улучшения поискового запроса для ретривера."
+            )
+        },
+    )
+
     rewritten_query: str = Field(default="", description="Новый поисковый запрос")
 
 class PrefixedEmbeddings(Embeddings):
@@ -326,11 +384,103 @@ class PrefixedEmbeddings(Embeddings):
         self.query_prefix = query_prefix
         self.doc_prefix = doc_prefix
 
-    def embed_documents(self, texts):
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return self.base.embed_documents([self.doc_prefix + t for t in texts])
 
-    def embed_query(self, text):
+    def embed_query(self, text: str) -> list[float]:
         return self.base.embed_query(self.query_prefix + text)
+
+
+class OpenRouterEmbeddings(Embeddings):
+    def __init__(self, model_name: str, api_key: str):
+        self.model_name = model_name
+        self.api_key = api_key.strip()
+        self.endpoint = "https://openrouter.ai/api/v1/embeddings"
+        self.batch_size = 32
+
+    def _parse_response_json(self, raw_bytes: bytes) -> dict[str, Any]:
+        text = raw_bytes.decode("utf-8", errors="replace").strip()
+        if not text:
+            raise RuntimeError("OpenRouter embeddings вернул пустой ответ.")
+
+        try:
+            payload = json.loads(text)
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            pass
+
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and start < end:
+            maybe_json = text[start : end + 1]
+            try:
+                payload = json.loads(maybe_json)
+                if isinstance(payload, dict):
+                    return payload
+            except json.JSONDecodeError:
+                pass
+
+        snippet = text[:500].replace("\n", " ")
+        raise RuntimeError(
+            "OpenRouter embeddings вернул ответ в неожиданном формате (не JSON). "
+            f"Фрагмент ответа: {snippet}"
+        )
+
+    def _request_embeddings(self, inputs: list[str]) -> list[list[float]]:
+        if not self.api_key:
+            raise ValueError("Не задан OPENROUTER_API_KEY для embedding модели.")
+
+        payload = {
+            "model": self.model_name,
+            "input": inputs,
+        }
+        body = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            self.endpoint,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                result = self._parse_response_json(response.read())
+        except urllib.error.HTTPError as err:
+            details = err.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(
+                f"Ошибка OpenRouter embeddings: HTTP {err.code}. {details}"
+            ) from err
+        except urllib.error.URLError as err:
+            raise RuntimeError(f"Сеть недоступна для OpenRouter embeddings: {err}") from err
+
+        data = result.get("data", [])
+        vectors: list[list[float]] = []
+        for item in data:
+            if isinstance(item, dict):
+                emb = item.get("embedding")
+                if isinstance(emb, list):
+                    vectors.append([float(v) for v in emb])
+
+        if len(vectors) != len(inputs):
+            raise RuntimeError("OpenRouter embeddings вернул некорректное число векторов.")
+        return vectors
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), self.batch_size):
+            batch = texts[start : start + self.batch_size]
+            vectors.extend(self._request_embeddings(batch))
+        return vectors
+
+    def embed_query(self, text: str) -> list[float]:
+        vectors = self._request_embeddings([text])
+        return vectors[0] if vectors else []
 
 class SimpleReranker:
     def __init__(self, model_name: str):
@@ -422,7 +572,7 @@ class PageOracleBackend:
         )
         self.temperature = 0.2  
         self.max_tokens = 4096
-        self.top_p = 0.8
+        self.top_p = 0.9
         self.score_threshold = 0.6
         self.history: list[dict[str, str]] = []
         self.history_max_messages = 20
@@ -432,26 +582,121 @@ class PageOracleBackend:
         self.last_manual_override = False
         self.last_retrieval_query = ""
         self.reranker: SimpleReranker | None = None
+        self.model_supports_tools = True
+        self.model_supports_structured_output = True
+        self.embedding_model_name = DEFAULT_EMBEDDING_MODEL
+
+    def _build_fallback_retrieve_response(self, query: str) -> AIMessage:
+        # Унифицируем fallback-вызов retrieve, когда bind_tools недоступен.
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "retrieve",
+                    "args": {"query": query},
+                    "id": "fallback_retrieve_call",
+                    "type": "tool_call",
+                }
+            ],
+        )
+
+    def _is_dimension_mismatch_error(self, err: Exception) -> bool:
+        msg = str(err).lower()
+        return (
+            "expecting embedding with dimension" in msg
+            or ("embedding" in msg and "dimension" in msg and " got " in msg)
+        )
+
+    def _validate_vectorstore_dimension(self) -> None:
+        if not self.vectorstore:
+            return
+        try:
+            if self.vectorstore._collection.count() > 0:
+                # Пробный запрос гарантирует, что размерность query-эмбеддинга
+                # совместима с размерностью уже сохранённой коллекции.
+                self.vectorstore.similarity_search("dimension probe", k=1)
+        except Exception as err:
+            if self._is_dimension_mismatch_error(err):
+                raise RuntimeError(str(err)) from err
+            raise
+
+    def _embedding_meta_path(self) -> Path:
+        return Path(self.persist_dir) / "embedding_config.json"
+
+    def _save_embedding_meta(self) -> None:
+        meta_path = self._embedding_meta_path()
+        meta_path.parent.mkdir(parents=True, exist_ok=True)
+        meta = {"embedding_model": self.embedding_model_name}
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _load_embedding_meta(self) -> str:
+        meta_path = self._embedding_meta_path()
+        if not meta_path.exists():
+            return ""
+        try:
+            payload = json.loads(meta_path.read_text(encoding="utf-8"))
+            return str(payload.get("embedding_model", "")).strip()
+        except Exception:
+            return ""
+
+    def _clear_vector_index(self) -> None:
+        self.vectorstore = None
+        self.mmr_retriever = None
+        self.quote_retriever = None
+        self.rag_chain = None
+        self.quote_chain = None
+        gc.collect()
+        shutil.rmtree(self.persist_dir, ignore_errors=True)
+
+    def _create_embeddings(self, embedding_model: str, api_key: str) -> Embeddings:
+        model_name = embedding_model.strip() or DEFAULT_EMBEDDING_MODEL
+        cfg = EMBEDDING_MODELS.get(model_name)
+        if not cfg:
+            raise ValueError(f"Неизвестная embedding модель: {model_name}")
+
+        provider = str(cfg.get("provider", ""))
+        query_prefix = str(cfg.get("query_prefix", ""))
+        doc_prefix = str(cfg.get("doc_prefix", ""))
+        resolved_api_key = api_key.strip() or os.getenv("OPENROUTER_API_KEY", "").strip()
+
+        if provider == "openrouter":
+            if resolved_api_key:
+                os.environ["OPENROUTER_API_KEY"] = resolved_api_key
+            base_emb: Embeddings = OpenRouterEmbeddings(
+                model_name=model_name,
+                api_key=resolved_api_key,
+            )
+        elif provider == "huggingface":
+            base_emb = HuggingFaceEmbeddings(model_name=model_name)
+        else:
+            raise ValueError(f"Неизвестный embedding provider: {provider}")
+
+        self.embedding_model_name = model_name
+        return PrefixedEmbeddings(
+            base_emb,
+            query_prefix=query_prefix,
+            doc_prefix=doc_prefix,
+        )
 
     # ── инициализация ────────────────────────────────────────────────
     def initialize(
         self,
         provider="DeepSeek",
         model_name="deepseek-chat",
-        api_key="",
+        llm_api_key: str = "",
+        embedding_api_key: str = "",
+        api_key: str = "",
+        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         temperature: float = 0.2,
-        max_tokens: int = 2048,
+        max_tokens: int = 4096,
         top_p: float = 0.9,
         score_threshold: float = 0.6,
     ):
+        resolved_llm_api_key = llm_api_key.strip() or api_key.strip()
+        resolved_embedding_api_key = embedding_api_key.strip() or api_key.strip()
         self.score_threshold = score_threshold
         self.log("[Инициализация] Загружаем эмбеддинги…")
-        base_emb = HuggingFaceEmbeddings(model_name="BAAI/bge-m3")
-        self.embeddings = PrefixedEmbeddings(
-            base_emb,
-            query_prefix="search_query: ",
-            doc_prefix="search_document: ",
-        )
+        self.embeddings = self._create_embeddings(embedding_model, resolved_embedding_api_key)
 
         self.log("[Инициализация] Загружаем книги…")
         self._load_all_books()
@@ -463,7 +708,7 @@ class PageOracleBackend:
         self.set_model(
             provider,
             model_name,
-            api_key,
+            resolved_llm_api_key,
             temperature=temperature,
             max_tokens=max_tokens,
             top_p=top_p,
@@ -569,6 +814,14 @@ class PageOracleBackend:
         persist = Path(self.persist_dir)
         if not self.splits and not persist.exists():
             return
+
+        stored_embedding_model = self._load_embedding_meta()
+        if persist.exists() and stored_embedding_model and stored_embedding_model != self.embedding_model_name:
+            self.log(
+                "[Индекс] Найден индекс для другой embedding модели. Пересоздаём индекс."
+            )
+            self._clear_vector_index()
+
         if persist.exists():
             self.vectorstore = Chroma(
                 embedding_function=self.embeddings,
@@ -576,32 +829,32 @@ class PageOracleBackend:
             )
             stored = self.vectorstore._collection.count()
             if stored > 0:
-                indexed_docs = self._get_indexed_documents()
-                if indexed_docs:
-                    self.splits = indexed_docs
-                    self._refresh_loaded_books_from_splits()
-                    self.log(
-                        f"[Индекс] Загружен из кэша ({stored} чанков). Используем сохранённый индекс."
-                    )
-                else:
-                    self.log("[Индекс] Кэш найден, но документы не прочитаны. Пересоздаём индекс.")
-                    self.vectorstore = None
-                    self.mmr_retriever = None
-                    self.quote_retriever = None
-                    self.rag_chain = None
-                    self.quote_chain = None
-                    gc.collect()
-                    shutil.rmtree(self.persist_dir, ignore_errors=True)
-                    self.vectorstore = self._build_vectorstore()
+                try:
+                    self._validate_vectorstore_dimension()
+                    indexed_docs = self._get_indexed_documents()
+                    if indexed_docs:
+                        self.splits = indexed_docs
+                        self._refresh_loaded_books_from_splits()
+                        self.log(
+                            f"[Индекс] Загружен из кэша ({stored} чанков). Используем сохранённый индекс."
+                        )
+                    else:
+                        self.log("[Индекс] Кэш найден, но документы не прочитаны. Пересоздаём индекс.")
+                        self._clear_vector_index()
+                        self.vectorstore = self._build_vectorstore()
+                except Exception as err:
+                    if self._is_dimension_mismatch_error(err):
+                        self.log(
+                            "[Индекс] Размерность embedding не совпадает с кэшем. "
+                            "Пересоздаём индекс для новой модели."
+                        )
+                        self._clear_vector_index()
+                        self.vectorstore = self._build_vectorstore()
+                    else:
+                        raise
             else:
                 self.log("[Индекс] Кэш пуст. Пересоздаём индекс.")
-                self.vectorstore = None
-                self.mmr_retriever = None
-                self.quote_retriever = None
-                self.rag_chain = None
-                self.quote_chain = None
-                gc.collect()
-                shutil.rmtree(self.persist_dir, ignore_errors=True)
+                self._clear_vector_index()
                 self.vectorstore = self._build_vectorstore()
         else:
             self.vectorstore = self._build_vectorstore()
@@ -658,11 +911,45 @@ class PageOracleBackend:
 
     def _build_vectorstore(self) -> Chroma:
         self.log("[Индекс] Создаём новый индекс…")
-        return Chroma.from_documents(
-            documents=self.splits,
-            embedding=self.embeddings,
-            persist_directory=self.persist_dir,
-        )
+        try:
+            vectorstore = Chroma.from_documents(
+                documents=self.splits,
+                embedding=self.embeddings,
+                persist_directory=self.persist_dir,
+            )
+            self._save_embedding_meta()
+            return vectorstore
+        except Exception:
+            # Если создание индекса оборвалось, удаляем частично созданный кэш.
+            shutil.rmtree(self.persist_dir, ignore_errors=True)
+            raise
+
+    def set_embeddings(self, embedding_model: str, api_key: str) -> bool:
+        try:
+            self.log(f"[Эмбеддинги] Переключаем embedding модель: {embedding_model}")
+            self.embeddings = self._create_embeddings(embedding_model, api_key)
+            
+            try:
+                self._init_vectorstore()
+            except Exception as init_err:
+                if self._is_dimension_mismatch_error(init_err):
+                    self.log(
+                        "[Эмбеддинги] Обнаружена несовместимость размерности эмбеддингов. "
+                        "Удаляю старую векторную базу и пересоздаю с новыми параметрами…"
+                    )
+                    self._clear_vector_index()
+                    self._init_vectorstore()
+                else:
+                    raise
+            
+            self._create_retrievers()
+            self._create_chains()
+            self._create_graph()
+            self.log(f"[Эмбеддинги] Активна модель: {self.embedding_model_name}")
+            return True
+        except Exception as err:
+            self.log(f"[Ошибка эмбеддингов] {err}")
+            return False
 
     # ── модель и цепочки ─────────────────────────────────────────────
     def set_model(
@@ -672,30 +959,48 @@ class PageOracleBackend:
         api_key: str,
         temperature: float = 0.2,
         max_tokens: int = 4096,
-        top_p: float = 0.8,
+        top_p: float = 0.9,
     ) -> bool:
         cfg = PROVIDERS.get(provider_name)
         if not cfg:
             self.log(f"[Ошибка] Неизвестный провайдер: {provider_name}")
             return False
-        os.environ[cfg["env_key"]] = api_key
+        env_key = str(cfg.get("env_key", "")).strip()
+        if env_key and api_key.strip():
+            os.environ[env_key] = api_key
         try:
-            module = importlib.import_module(cfg["package"])
-            model_class = getattr(module, cfg["class"])
             self.temperature = temperature
             self.max_tokens = max_tokens
             self.top_p = top_p
+            self.model_supports_tools = provider_name != "HuggingFace"
+            self.model_supports_structured_output = provider_name != "HuggingFace"
+
+            module = importlib.import_module(cfg["package"])
+            model_class = getattr(module, cfg["class"])
+
+            provider_kwargs: dict[str, Any] = {}
+            if provider_name == "GigaChat":
+                provider_kwargs["verify_ssl_certs"] = bool(
+                    cfg.get("verify_ssl_certs", False)
+                )
 
             common_kwargs = {
                 "model": model_name,
                 "temperature": temperature,
                 "max_tokens": max_tokens,
                 "top_p": top_p,
+                **provider_kwargs,
             }
+
+            # По документации LangChain для OpenRouter используем выделенный
+            # провайдер ChatOpenRouter (langchain_openrouter)
+            if provider_name == "OpenRouter" and api_key.strip():
+                common_kwargs["api_key"] = api_key.strip()
 
             # Некоторые провайдеры используют max_output_tokens вместо max_tokens.
             if provider_name == "Google":
                 common_kwargs["max_output_tokens"] = max_tokens
+
 
             try:
                 self.model = model_class(**common_kwargs)
@@ -703,10 +1008,17 @@ class PageOracleBackend:
                 # Fallback для моделей с неполной поддержкой kwargs.
                 try:
                     self.model = model_class(
-                        model=model_name, temperature=temperature, top_p=top_p
+                        model=model_name,
+                        temperature=temperature,
+                        top_p=top_p,
+                        **provider_kwargs,
                     )
                 except TypeError:
-                    self.model = model_class(model=model_name, temperature=temperature)
+                    self.model = model_class(
+                        model=model_name,
+                        temperature=temperature,
+                        **provider_kwargs,
+                    )
 
             self._create_chains()
             self._create_graph()
@@ -894,30 +1206,6 @@ class PageOracleBackend:
         ]
         return any(signal in q for signal in quote_signals)
 
-    def _is_meta_question(self, question: str) -> bool:
-        q = question.lower()
-        meta_signals = [
-            "интерфейс",
-            "настройк",
-            "кнопк",
-            "api",
-            "ошибк",
-            "приложени",
-            "программа",
-        ]
-        book_signals = [
-            "герой",
-            "сюжет",
-            "глава",
-            "часть",
-            "цитат",
-            "роман",
-            "персонаж",
-        ]
-        return any(signal in q for signal in meta_signals) and not any(
-            signal in q for signal in book_signals
-        )
-
     def _build_retrieve_tool(self):
         @tool
         def retrieve(query: str) -> str:
@@ -967,7 +1255,25 @@ class PageOracleBackend:
                 HumanMessage(content=question),
             ]
 
-        response = model.bind_tools([self._build_retrieve_tool()]).invoke(messages)
+        retrieve_tool = self._build_retrieve_tool()
+        retrieval_query = (state.get("retrieval_query", question) or question).strip()
+
+        if self.model_supports_tools:
+            try:
+                response = model.bind_tools([retrieve_tool]).invoke(messages)
+                content_str = str(getattr(response, "content", ""))
+                # Проверка: некоторые модели OpenRouter возвращают ошибку tool_choice в виде обычного текста (или JSON строки) вместо исключения
+                if "No endpoints found that support the provided 'tool_choice' value" in content_str or "tool_choice" in content_str:
+                    raise Exception("OpenRouter soft error: " + content_str)
+                # Если ответ пустой и нет вызовов тулов - модель не справилась с bind_tools
+                if not content_str.strip() and not getattr(response, "tool_calls", []):
+                    raise Exception("Model returned empty content without tool calls (possibly does not support tools)")
+            except Exception as err:
+                self.log(f"[Tools] bind_tools недоступен, fallback: {err}")
+                self.model_supports_tools = False
+                response = self._build_fallback_retrieve_response(retrieval_query)
+        else:
+            response = self._build_fallback_retrieve_response(retrieval_query)
         forced = cast(Literal["", "analysis", "quote"], state.get("force_answer_style", ""))
         if forced in {"analysis", "quote"}:
             style = forced
@@ -978,7 +1284,7 @@ class PageOracleBackend:
             "messages": [response],
             "answer_style": cast(Literal["analysis", "quote"], style),
             "route_decision": "tool-or-direct",
-            "retrieval_query": state.get("retrieval_query", question) or question,
+            "retrieval_query": retrieval_query,
         }
 
     def _route_after_retrieve(
@@ -1012,13 +1318,26 @@ class PageOracleBackend:
                 return "generate_analysis_answer"
             return "generate_quote_answer" if self._looks_like_quote_request(question) else "generate_analysis_answer"
 
-        decision = model.with_structured_output(GradeDecision).invoke(
-            [
-                HumanMessage(
-                    content=GRADE_PROMPT.format(question=question, context=context)
+        decision = None
+        if getattr(self, "model_supports_structured_output", True):
+            try:
+                decision = model.with_structured_output(GradeDecision).invoke(
+                    [
+                        HumanMessage(
+                            content=GRADE_PROMPT.format(question=question, context=context)
+                        )
+                    ]
                 )
-            ]
-        )
+            except Exception as e:
+                self.log(f"[Grade] with_structured_output недоступен, fallback ручного парсинга: {e}")
+                self.model_supports_structured_output = False
+
+        if not decision:
+            reply = model.invoke([HumanMessage(content=GRADE_PROMPT.format(question=question, context=context))])
+            content = _extract_text(getattr(reply, "content", "")).lower()
+            binary_score = "yes" if "yes" in content else "no"
+            ans_style = "quote" if "quote" in content else "analysis"
+            decision = GradeDecision(binary_score=binary_score, answer_style=ans_style)
 
         if decision.binary_score == "no":
             rewrite_count = int(state.get("rewrite_count", 0))
@@ -1119,13 +1438,48 @@ class PageOracleBackend:
                 "route_decision": "rewrite",
             }
 
-        decision = model.with_structured_output(RewriteDecision).invoke(
-            [
-                HumanMessage(
-                    content=REWRITE_PROMPT.format(question=question, query=query)
+        decision = None
+        if getattr(self, "model_supports_structured_output", True):
+            try:
+                decision = model.with_structured_output(RewriteDecision).invoke(
+                    [
+                        HumanMessage(
+                            content=REWRITE_PROMPT.format(question=question, query=query)
+                        )
+                    ]
                 )
-            ]
-        )
+            except Exception as e:
+                self.log(f"[Rewrite] with_structured_output недоступен, fallback ручного парсинга: {e}")
+                self.model_supports_structured_output = False
+
+        if not decision:
+            reply = model.invoke([HumanMessage(content=REWRITE_PROMPT.format(question=question, query=query))])
+            content = _extract_text(getattr(reply, "content", "")).strip()
+            rewritten_query = content
+            try:
+                start = content.find("{")
+                end = content.rfind("}")
+                if start != -1 and end != -1 and start < end:
+                    data = json.loads(content[start:end+1])
+                    if "rewritten_query" in data:
+                        rewritten_query = str(data["rewritten_query"])
+            except Exception:
+                pass
+            
+            # Очистка от текстовых префиксов, если модель ответила строкой
+            rewritten_query = re.sub(
+                r"^(?:\*\*?)?(?:rewritten_query|новый запрос|запрос|query)(?:\*\*?)?:\s*",
+                "",
+                rewritten_query,
+                flags=re.IGNORECASE,
+            ).strip()
+            # Убираем кавычки с краёв если модель их добавила
+            if rewritten_query.startswith('"') and rewritten_query.endswith('"'):
+                rewritten_query = rewritten_query[1:-1].strip()
+            elif rewritten_query.startswith("'") and rewritten_query.endswith("'"):
+                rewritten_query = rewritten_query[1:-1].strip()
+                
+            decision = RewriteDecision(rewritten_query=rewritten_query)
 
         rewritten_query = decision.rewritten_query.strip() or query or question
         return {
