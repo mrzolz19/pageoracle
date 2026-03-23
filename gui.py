@@ -1,12 +1,15 @@
 """
 PageOracle GUI (Tkinter-Designer style layout)
+Интерфейс в стиле Tkinter-Designer:
 - Canvas как основа лейаута
+- Точное позиционирование блоков по Figma-структуре
 - Привязка к backend из main.py
 """
 from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import threading
 from datetime import datetime
@@ -55,6 +58,7 @@ INPUT_PLACEHOLDER = "Задайте вопрос по загруженным к�
 EMBEDDING_OPTIONS = [
 	"nvidia/llama-nemotron-embed-vl-1b-v2:free",
 	"BAAI/bge-m3",
+	"text-search-doc/latest",
 ]
 
 
@@ -82,6 +86,7 @@ def load_settings() -> dict:
 		"embedding_model": "nvidia/llama-nemotron-embed-vl-1b-v2:free",
 		"llm_api_key": "",
 		"embedding_api_key": "",
+		"yc_folder_id": "",
 		"temperature": 0.3,
 		"max_tokens": 2048,
 		"top_p": 0.8,
@@ -107,11 +112,19 @@ def save_settings(data: dict) -> None:
 
 
 class SettingsWindow:
+	@staticmethod
+	def _enable_entry_undo(entry: Entry) -> None:
+		try:
+			entry.tk.call(str(entry), "configure", "-undo", 1)
+		except TclError:
+			# Some Tk builds may not expose undo for Entry; keep graceful fallback.
+			pass
+
 	def __init__(self, parent, current: dict, providers: dict, on_save):
 		self.providers = providers
 		self.on_save = on_save
 		win_width = 560
-		win_height = 760
+		win_height = 840
 
 		self.win = Toplevel(parent)
 		self.win.title("PageOracle - Настройки")
@@ -129,7 +142,7 @@ class SettingsWindow:
 		canvas = Canvas(self.win, bg=BG, width=win_width, height=win_height, bd=0, highlightthickness=0)
 		canvas.place(x=0, y=0)
 
-		canvas.create_rectangle(16, 16, 544, 744, fill=BG, outline=BORDER, width=1)
+		canvas.create_rectangle(16, 16, 544, 824, fill=BG, outline=BORDER, width=1)
 		canvas.create_text(34, 40, anchor="nw", text="⚙ Настройки", fill=TEXT_PRI, font=("Segoe UI", 18, "bold"))
 
 		canvas.create_text(34, 92, anchor="nw", text="Провайдер ИИ", fill=TEXT_SEC, font=("Segoe UI", 11))
@@ -144,13 +157,13 @@ class SettingsWindow:
 		self.provider_cb.place(x=34, y=116, width=492, height=36)
 		self.provider_cb.bind("<<ComboboxSelected>>", self._on_provider_change)
 
-		canvas.create_text(34, 176, anchor="nw", text="LLM Модель", fill=TEXT_SEC, font=("Segoe UI", 11))
+		canvas.create_text(34, 176, anchor="nw", text="LLM модель", fill=TEXT_SEC, font=("Segoe UI", 11))
 		self.model_var = StringVar(value=current.get("model", "deepseek-chat"))
 		self.model_cb = ttk.Combobox(self.win, textvariable=self.model_var, font=("Segoe UI", 11), state="readonly")
 		self._update_model_list()
 		self.model_cb.place(x=34, y=200, width=492, height=36)
 
-		canvas.create_text(34, 260, anchor="nw", text="Embedding модель", fill=TEXT_SEC, font=("Segoe UI", 11))
+		canvas.create_text(34, 260, anchor="nw", text="Embedding-модель", fill=TEXT_SEC, font=("Segoe UI", 11))
 		self.embedding_var = StringVar(value=current.get("embedding_model", EMBEDDING_OPTIONS[0]))
 		self.embedding_cb = ttk.Combobox(
 			self.win,
@@ -161,7 +174,7 @@ class SettingsWindow:
 		)
 		self.embedding_cb.place(x=34, y=284, width=492, height=36)
 
-		canvas.create_text(34, 344, anchor="nw", text="API Ключ LLM", fill=TEXT_SEC, font=("Segoe UI", 11))
+		canvas.create_text(34, 344, anchor="nw", text="API ключ от LLM", fill=TEXT_SEC, font=("Segoe UI", 11))
 		self.llm_api_entry = Entry(
 			self.win,
 			font=("Segoe UI", 11),
@@ -172,10 +185,11 @@ class SettingsWindow:
 			relief="flat",
 			bd=0,
 		)
+		self._enable_entry_undo(self.llm_api_entry)
 		self.llm_api_entry.place(x=34, y=368, width=492, height=36)
 		self.llm_api_entry.insert(0, current.get("llm_api_key", ""))
 
-		canvas.create_text(34, 428, anchor="nw", text="API Ключ Embedding", fill=TEXT_SEC, font=("Segoe UI", 11))
+		canvas.create_text(34, 428, anchor="nw", text="API ключ embedding-модели", fill=TEXT_SEC, font=("Segoe UI", 11))
 		self.embedding_api_entry = Entry(
 			self.win,
 			font=("Segoe UI", 11),
@@ -186,8 +200,23 @@ class SettingsWindow:
 			relief="flat",
 			bd=0,
 		)
+		self._enable_entry_undo(self.embedding_api_entry)
 		self.embedding_api_entry.place(x=34, y=452, width=492, height=36)
 		self.embedding_api_entry.insert(0, current.get("embedding_api_key", ""))
+
+		canvas.create_text(34, 512, anchor="nw", text="YC_FOLDER_ID (для YandexGPT)", fill=TEXT_SEC, font=("Segoe UI", 11))
+		self.yc_folder_entry = Entry(
+			self.win,
+			font=("Segoe UI", 11),
+			bg=INPUT_BG,
+			fg=TEXT_PRI,
+			insertbackground=TEXT_PRI,
+			relief="flat",
+			bd=0,
+		)
+		self._enable_entry_undo(self.yc_folder_entry)
+		self.yc_folder_entry.place(x=34, y=536, width=492, height=36)
+		self.yc_folder_entry.insert(0, current.get("yc_folder_id", ""))
 
 		self.show_var = StringVar(value="0")
 		show_btn = ttk.Checkbutton(
@@ -196,9 +225,9 @@ class SettingsWindow:
 			variable=self.show_var,
 			command=self._toggle_key,
 		)
-		show_btn.place(x=34, y=494)
+		show_btn.place(x=34, y=582)
 
-		canvas.create_text(34, 532, anchor="nw", text="Temperature", fill=TEXT_SEC, font=("Segoe UI", 11))
+		canvas.create_text(34, 620, anchor="nw", text="Temperature", fill=TEXT_SEC, font=("Segoe UI", 11))
 		self.temperature_entry = Entry(
 			self.win,
 			font=("Segoe UI", 11),
@@ -208,10 +237,11 @@ class SettingsWindow:
 			relief="flat",
 			bd=0,
 		)
-		self.temperature_entry.place(x=34, y=556, width=236, height=36)
+		self._enable_entry_undo(self.temperature_entry)
+		self.temperature_entry.place(x=34, y=644, width=236, height=36)
 		self.temperature_entry.insert(0, str(current.get("temperature", 0.3)))
 
-		canvas.create_text(290, 532, anchor="nw", text="Max Tokens", fill=TEXT_SEC, font=("Segoe UI", 11))
+		canvas.create_text(290, 620, anchor="nw", text="Max Tokens", fill=TEXT_SEC, font=("Segoe UI", 11))
 		self.max_tokens_entry = Entry(
 			self.win,
 			font=("Segoe UI", 11),
@@ -221,10 +251,11 @@ class SettingsWindow:
 			relief="flat",
 			bd=0,
 		)
-		self.max_tokens_entry.place(x=290, y=556, width=236, height=36)
+		self._enable_entry_undo(self.max_tokens_entry)
+		self.max_tokens_entry.place(x=290, y=644, width=236, height=36)
 		self.max_tokens_entry.insert(0, str(current.get("max_tokens", 2048)))
 
-		canvas.create_text(34, 604, anchor="nw", text="Top P", fill=TEXT_SEC, font=("Segoe UI", 11))
+		canvas.create_text(34, 692, anchor="nw", text="Top P", fill=TEXT_SEC, font=("Segoe UI", 11))
 		self.top_p_entry = Entry(
 			self.win,
 			font=("Segoe UI", 11),
@@ -234,10 +265,11 @@ class SettingsWindow:
 			relief="flat",
 			bd=0,
 		)
-		self.top_p_entry.place(x=34, y=628, width=236, height=36)
+		self._enable_entry_undo(self.top_p_entry)
+		self.top_p_entry.place(x=34, y=716, width=236, height=36)
 		self.top_p_entry.insert(0, str(current.get("top_p", 0.8)))
 
-		canvas.create_text(290, 604, anchor="nw", text="Score Threshold", fill=TEXT_SEC, font=("Segoe UI", 11))
+		canvas.create_text(290, 692, anchor="nw", text="Score Threshold", fill=TEXT_SEC, font=("Segoe UI", 11))
 		self.score_threshold_entry = Entry(
 			self.win,
 			font=("Segoe UI", 11),
@@ -247,7 +279,8 @@ class SettingsWindow:
 			relief="flat",
 			bd=0,
 		)
-		self.score_threshold_entry.place(x=290, y=628, width=236, height=36)
+		self._enable_entry_undo(self.score_threshold_entry)
+		self.score_threshold_entry.place(x=290, y=716, width=236, height=36)
 		self.score_threshold_entry.insert(0, str(current.get("score_threshold", 0.6)))
 
 		cancel_btn = Button(
@@ -262,7 +295,7 @@ class SettingsWindow:
 			cursor="hand2",
 			font=("Segoe UI", 11),
 		)
-		cancel_btn.place(x=306, y=688, width=100, height=40)
+		cancel_btn.place(x=306, y=776, width=100, height=40)
 
 		save_btn = Button(
 			self.win,
@@ -276,7 +309,7 @@ class SettingsWindow:
 			cursor="hand2",
 			font=("Segoe UI", 11, "bold"),
 		)
-		save_btn.place(x=416, y=688, width=110, height=40)
+		save_btn.place(x=416, y=776, width=110, height=40)
 
 	def _toggle_key(self) -> None:
 		mask = "" if self.show_var.get() == "1" else "*"
@@ -321,6 +354,7 @@ class SettingsWindow:
 			"embedding_model": self.embedding_var.get(),
 			"llm_api_key": self.llm_api_entry.get().strip(),
 			"embedding_api_key": self.embedding_api_entry.get().strip(),
+			"yc_folder_id": self.yc_folder_entry.get().strip(),
 			"temperature": temperature,
 			"max_tokens": max_tokens,
 			"top_p": top_p,
@@ -331,6 +365,13 @@ class SettingsWindow:
 			return
 		if data["embedding_model"] == "nvidia/llama-nemotron-embed-vl-1b-v2:free" and not data["embedding_api_key"]:
 			messagebox.showwarning("Внимание", "Введите API ключ Embedding для OpenRouter модели.", parent=self.win)
+			return
+		uses_yandex = (
+			data["provider"] == "YandexGPT"
+			or data["embedding_model"] == "text-search-doc/latest"
+		)
+		if uses_yandex and not data["yc_folder_id"]:
+			messagebox.showwarning("Внимание", "Введите YC_FOLDER_ID для Yandex моделей.", parent=self.win)
 			return
 		save_settings(data)
 		self.on_save(data)
@@ -378,6 +419,14 @@ class SettingsWindow:
 
 
 class PageOracleApp:
+	@staticmethod
+	def _enable_entry_undo(entry: Entry) -> None:
+		try:
+			entry.tk.call(str(entry), "configure", "-undo", 1)
+		except TclError:
+			# Some Tk builds may not expose undo for Entry; keep graceful fallback.
+			pass
+
 	def __init__(self) -> None:
 		self.settings = load_settings()
 		self.backend: PageOracleBackend | None = None
@@ -568,6 +617,7 @@ class PageOracleApp:
 			bd=0,
 			font=("Segoe UI", 11),
 		)
+		self._enable_entry_undo(self.input_entry)
 		self.input_entry.place(x=324, y=598, width=712, height=20)
 		self.input_entry.bind("<Return>", lambda _evt: self._on_send())
 		self.input_entry.insert(0, INPUT_PLACEHOLDER)
@@ -674,10 +724,6 @@ class PageOracleApp:
 
 		self.window.bind_all("<Control-c>", self._on_copy, add="+")
 		self.window.bind_all("<Control-C>", self._on_copy, add="+")
-		self.window.bind_all("<Control-v>", self._on_paste, add="+")
-		self.window.bind_all("<Control-V>", self._on_paste, add="+")
-		self.window.bind_all("<Control-x>", self._on_cut, add="+")
-		self.window.bind_all("<Control-X>", self._on_cut, add="+")
 		self.window.bind_all("<Control-a>", self._on_select_all, add="+")
 		self.window.bind_all("<Control-A>", self._on_select_all, add="+")
 		self.window.bind_all("<Control-z>", self._on_undo, add="+")
@@ -788,6 +834,9 @@ class PageOracleApp:
 			return None
 		if not self._is_widget_editable(widget):
 			return "break"
+		# For Entry widgets class bindings may run before bind_all; avoid double undo.
+		if isinstance(widget, Entry):
+			return None
 		widget.event_generate("<<Undo>>")
 		return "break"
 
@@ -884,8 +933,20 @@ class PageOracleApp:
 		# Единая точка запуска фоновых задач для UI-операций.
 		threading.Thread(target=target, args=args, daemon=True).start()
 
+	def _apply_provider_env(self, settings: dict) -> None:
+		llm_api_key = str(settings.get("llm_api_key", "")).strip()
+		embedding_api_key = str(settings.get("embedding_api_key", "")).strip()
+		yc_folder_id = str(settings.get("yc_folder_id", "")).strip()
+		if llm_api_key:
+			os.environ["YC_API_KEY"] = llm_api_key
+		elif embedding_api_key:
+			os.environ["YC_API_KEY"] = embedding_api_key
+		if yc_folder_id:
+			os.environ["YC_FOLDER_ID"] = yc_folder_id
+
 	def _init_worker(self) -> None:
 		try:
+			self._apply_provider_env(self.settings)
 			self.backend = PageOracleBackend(log_callback=print)
 			self.backend.initialize(
 				provider=self.settings.get("provider", "DeepSeek"),
@@ -1042,6 +1103,7 @@ class PageOracleApp:
 		try:
 			if not self.backend:
 				return
+			self._apply_provider_env(settings)
 			embedding_model = settings.get("embedding_model", EMBEDDING_OPTIONS[0])
 			ok = self.backend.set_model(
 				settings["provider"],
