@@ -1,3 +1,14 @@
+"""
+PageOracle backend.
+
+Этот модуль реализует полный RAG-конвейер поверх книжных TXT-файлов:
+- разбор структуры книги (части/главы),
+- индексация в Chroma,
+- гибридный retrieval (векторный + BM25) с rerank,
+- маршрутизация запросов через LangGraph,
+- генерация ответа в режимах analysis/quote.
+"""
+
 import re
 import json
 import shutil
@@ -159,6 +170,7 @@ _ROMAN_MAP = {
     "XX": 20,
 }
 
+# Регулярные выражения для грубого структурирования художественных текстов.
 _PART_RE = re.compile(r"^\s*ЧАСТЬ\s+(\w+)\s*$", re.IGNORECASE)
 _CHAPTER_RE = re.compile(r"^\s*(?:Глава|ГЛАВА)\s+([IVXLCDM]+|\d+)\s*$")
 _ROMAN_RE = re.compile(r"^\s*([IVXLCDM]{1,7})\.?\s*$")
@@ -166,6 +178,7 @@ _EPILOGUE_RE = re.compile(r"^\s*ЭПИЛОГ\s*$", re.IGNORECASE)
 
 
 def annotate_book(docs: list[Document], book_title: str) -> list[Document]:
+    """Нарезает документ на логические сегменты и добавляет метаданные part/chapter."""
     result: list[Document] = []
     for doc in docs:
         lines = doc.page_content.split("\n")
@@ -224,6 +237,7 @@ def annotate_book(docs: list[Document], book_title: str) -> list[Document]:
 
 
 def format_docs(docs: list[Document]) -> str:
+    """Форматирует список документов в единый текстовый контекст для промпта."""
     parts: list[str] = []
     for doc in docs:
         m = doc.metadata
@@ -256,6 +270,7 @@ def ensure_context(input_dict: dict) -> dict:
 
 
 def _extract_text(content: Any) -> str:
+    """Нормализует ответ модели/инструмента в строку (str | list[dict|str] -> str)."""
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -385,6 +400,8 @@ class RewriteDecision(BaseModel):
     rewritten_query: str = Field(default="", description="Новый поисковый запрос")
 
 class PrefixedEmbeddings(Embeddings):
+    """Обёртка для embedding-моделей с префиксами query/document."""
+
     def __init__(self, base, query_prefix="", doc_prefix=""):
         self.base = base
         self.query_prefix = query_prefix
@@ -398,6 +415,8 @@ class PrefixedEmbeddings(Embeddings):
 
 
 class RateLimitedEmbeddings(Embeddings):
+    """Ограничивает частоту запросов к embedding API, чтобы не ловить rate-limit."""
+
     def __init__(
         self,
         base: Embeddings,
@@ -440,6 +459,8 @@ class RateLimitedEmbeddings(Embeddings):
 
 
 class OpenRouterEmbeddings(Embeddings):
+    """Минимальный клиент OpenRouter embeddings (без внешних SDK)."""
+
     def __init__(self, model_name: str, api_key: str):
         self.model_name = model_name
         self.api_key = api_key.strip()
@@ -531,6 +552,8 @@ class OpenRouterEmbeddings(Embeddings):
         return vectors[0] if vectors else []
 
 class SimpleReranker:
+    """Переупорядочивает найденные документы по CrossEncoder-скорингу."""
+
     def __init__(self, model_name: str):
         """
         Args:
@@ -573,6 +596,8 @@ class SimpleReranker:
         return result
 
 class HybridRerankerRetriever(BaseRetriever):
+    """Комбинирует два retriever-источника и применяет финальный rerank."""
+
     first_retriever: BaseRetriever
     second_retriever: BaseRetriever
     reranker: SimpleReranker
@@ -598,6 +623,8 @@ class HybridRerankerRetriever(BaseRetriever):
         return self.reranker.rerank(query, merged, self.k)
 
 class PageOracleBackend:
+    """Основной оркестратор: загрузка книг, индекс, модель, граф и история."""
+
     def __init__(
         self, books_dir=".", persist_dir="./chroma_intro_db", log_callback=None
     ):
@@ -737,6 +764,8 @@ class PageOracleBackend:
         shutil.rmtree(self.persist_dir, ignore_errors=True)
 
     def _create_embeddings(self, embedding_model: str, api_key: str) -> Embeddings:
+        # Важный нюанс: один и тот же UI-параметр embedding_model
+        # маппится на разные backend-клиенты в зависимости от provider.
         model_name = embedding_model.strip() or DEFAULT_EMBEDDING_MODEL
         cfg = EMBEDDING_MODELS.get(model_name)
         if not cfg:
@@ -949,6 +978,8 @@ class PageOracleBackend:
 
         stored_embedding_model = self._load_embedding_meta()
         if persist.exists() and stored_embedding_model and stored_embedding_model != self.embedding_model_name:
+            # Индекс нельзя переиспользовать между embedding-моделями
+            # с разной размерностью векторов.
             self.log(
                 "[Индекс] Найден индекс для другой embedding модели. Пересоздаём индекс."
             )
@@ -994,6 +1025,7 @@ class PageOracleBackend:
         self._create_retrievers()
 
     def _create_retrievers(self) -> None:
+        """Создаёт retriever для анализа и retriever для поиска цитат."""
         if not self.vectorstore or not self.splits:
             return
         if self.reranker is None:
@@ -1196,6 +1228,7 @@ class PageOracleBackend:
             return False
 
     def _create_chains(self):
+        """Собирает две RAG-цепочки: аналитическая и цитатная."""
         if not self.model or not self.vectorstore:
             return
         mmr = self.mmr_retriever
@@ -1236,6 +1269,7 @@ class PageOracleBackend:
         )
 
     def _create_graph(self) -> None:
+        """Строит граф принятия решений: retrieve/rewrite/answer."""
         if not self.model or not self.vectorstore:
             self.graph_app = None
             return
@@ -1422,6 +1456,8 @@ class PageOracleBackend:
         retrieve_tool = self._build_retrieve_tool()
         retrieval_query = (state.get("retrieval_query", question) or question).strip()
 
+        # Сначала пробуем tool-calling. Если модель/роут не поддерживает tools,
+        # автоматически переключаемся на совместимый fallback-маршрут.
         if self.model_supports_tools:
             try:
                 response = model.bind_tools([retrieve_tool]).invoke(messages)
@@ -1510,6 +1546,8 @@ class PageOracleBackend:
             decision = GradeDecision(binary_score=binary_score, answer_style=ans_style)
 
         if decision.binary_score == "no":
+            # Если контекст формально найден, но по смыслу слабый,
+            # запускаем ограниченное число попыток rewrite.
             rewrite_count = int(state.get("rewrite_count", 0))
             max_rewrites = int(state.get("max_rewrites", 2))
             if rewrite_count < max_rewrites:
@@ -1651,6 +1689,8 @@ class PageOracleBackend:
                 
             decision = RewriteDecision(rewritten_query=rewritten_query)
 
+        # Страхуемся от пустого rewritten_query, чтобы граф не зациклился
+        # на бессодержательных запросах.
         rewritten_query = decision.rewritten_query.strip() or query or question
         return {
             "messages": [HumanMessage(content=rewritten_query)],
@@ -1705,6 +1745,7 @@ class PageOracleBackend:
         self.log(f"[Готово] Добавлено {len(new_splits)} чанков из «{path.name}».")
 
     def ask(self, question: str, mode: str = "auto") -> str:
+        """Главная публичная точка входа: запускает граф и возвращает финальный ответ."""
         question = question.strip()
         if not question:
             return "[Ошибка] Вопрос пустой."
