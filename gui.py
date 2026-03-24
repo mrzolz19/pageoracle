@@ -81,15 +81,15 @@ class TextRedirector(io.TextIOBase):
 
 def load_settings() -> dict:
 	defaults = {
-		"provider": "DeepSeek",
-		"model": "deepseek-chat",
+		"provider": "YandexGPT",
+		"model": "yandexgpt-5.1/latest",
 		"embedding_model": "nvidia/llama-nemotron-embed-vl-1b-v2:free",
 		"llm_api_key": "",
 		"embedding_api_key": "",
 		"yc_folder_id": "",
-		"temperature": 0.3,
-		"max_tokens": 2048,
-		"top_p": 0.8,
+		"temperature": 0.2,
+		"max_tokens": 4096,
+		"top_p": 0.9,
 		"score_threshold": 0.6,
 	}
 	if SETTINGS_FILE.exists():
