@@ -67,7 +67,7 @@ pip install -r requirements.txt
 Дождитесь установки всех пакетов
 
 3. Предварительно поместите файлы книг с форматом `.txt.` в папку с программой
-4. Запустите PageOracle
+4. Запустите PageOracle с помощью Python 3.10+
 ```bash
 python gui.py
 ```
