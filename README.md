@@ -33,10 +33,10 @@ flowchart TD
 ```
 
 ## 📄Содержание по главам:
-[Глава I. Работа с PageOracle](README.md#глава-II.-как-работает-pageoracle)
-1. [Как пользоваться PageOracle](README.md#как-пользоваться-pageoracle)
-2. [Пользовательский интерфейс (GUI)](README.md#пользовательский-интерфейс-gui)
-3. [Примеры работы](README.md#примеры-работы)
+[Глава I. Работа с PageOracle](README.md#%D0%B3%D0%BB%D0%B0%D0%B2%D0%B0-II.-%D0%BA%D0%B0%D0%BA-%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D0%B0%D0%B5%D1%82-pageoracle)
+1. [Как пользоваться PageOracle](README.md#%D0%BA%D0%B0%D0%BA-%D0%BF%D0%BE%D0%BB%D1%8C%D0%B7%D0%BE%D0%B2%D0%B0%D1%82%D1%8C%D1%81%D1%8F-pageoracle-%D0%B2-9-%D1%88%D0%B0%D0%B3%D0%BE%D0%B2)
+2. [Пользовательский интерфейс (GUI)](README.md#%D0%BF%D0%BE%D0%BB%D1%8C%D0%B7%D0%BE%D0%B2%D0%B0%D1%82%D0%B5%D0%BB%D1%8C%D1%81%D0%BA%D0%B8%D0%B9-%D0%B8%D0%BD%D1%82%D0%B5%D1%80%D1%84%D0%B5%D0%B9%D1%81-gui)
+3. [Примеры работы](README.md#%D0%BF%D1%80%D0%B8%D0%BC%D0%B5%D1%80%D1%8B-%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D1%8B)
 
 [Глава II. Как работает PageOracle](README.md#%D0%B3%D0%BB%D0%B0%D0%B2%D0%B0-ii-%D0%BA%D0%B0%D0%BA-%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D0%B0%D0%B5%D1%82-pageoracle)
 1. [Обработка и индексирование документов](README.md#%D0%BE%D0%B1%D1%80%D0%B0%D0%B1%D0%BE%D1%82%D0%BA%D0%B0-%D0%B8-%D0%B8%D0%BD%D0%B4%D0%B5%D0%BA%D1%81%D0%B8%D1%80%D0%BE%D0%B2%D0%B0%D0%BD%D0%B8%D0%B5-%D0%B4%D0%BE%D0%BA%D1%83%D0%BC%D0%B5%D0%BD%D1%82%D0%BE%D0%B2)
