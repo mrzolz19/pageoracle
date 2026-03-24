@@ -74,7 +74,10 @@ python gui.py
 5. Зайдите в настройки и выберите:
 
 <img width="1474" height="886" alt="Где находятся настройки" src="https://github.com/user-attachments/assets/d8cd1882-8e85-4054-8653-419e2f0f242c" />
-![Как выглядит меню настроек](https://github.com/user-attachments/assets/924b2595-1c58-49de-b1e5-87e3fe933ef0)
+
+![1323](https://github.com/user-attachments/assets/75fbc1b6-02f0-4300-be9c-f9dd920cf482)
+
+
 
  1. Провайдера ИИ: YandexGPT - рекомендуется по умолчанию, Deepseek, OpenAI, OpenRouter, Google, Anthropic, GigaChat
  2. LLM модель: yandexgpt-5.1/latest - рекомендуется по умолчанию. В зависимости от провайдера может быть deepseek-chat, gpt-5.4, gigachat-2 и т.д
