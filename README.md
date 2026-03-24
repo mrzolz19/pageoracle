@@ -73,7 +73,7 @@ python gui.py
 ```
 5. Зайдите в настройки и выберите:
 
-<img width="1074" height="446" alt="Где находятся настройки" src="https://github.com/user-attachments/assets/d8cd1882-8e85-4054-8653-419e2f0f242c" />
+<img width="1074" height="646" alt="Где находятся настройки" src="https://github.com/user-attachments/assets/d8cd1882-8e85-4054-8653-419e2f0f242c" />
 
 <img width="453" height="1065" alt="Где находятся настройки" src="https://github.com/user-attachments/assets/75fbc1b6-02f0-4300-be9c-f9dd920cf482" />
 
