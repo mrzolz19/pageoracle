@@ -63,6 +63,8 @@ EMBEDDING_OPTIONS = [
 
 
 class TextRedirector(io.TextIOBase):
+	"""Прокидывает print-логи в виджет логов, сохраняя вывод и в stdout."""
+
 	def __init__(self, callback, original):
 		self.callback = callback
 		self.original = original
@@ -80,6 +82,7 @@ class TextRedirector(io.TextIOBase):
 
 
 def load_settings() -> dict:
+	"""Загружает настройки UI/модели и мягко мигрирует legacy api_key."""
 	defaults = {
 		"provider": "YandexGPT",
 		"model": "yandexgpt-5.1/latest",
@@ -107,11 +110,14 @@ def load_settings() -> dict:
 
 
 def save_settings(data: dict) -> None:
+	"""Сохраняет настройки приложения в settings.json."""
 	with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
 		json.dump(data, file, ensure_ascii=False, indent=2)
 
 
 class SettingsWindow:
+	"""Модальное окно конфигурации провайдера, модели и параметров генерации."""
+
 	@staticmethod
 	def _enable_entry_undo(entry: Entry) -> None:
 		try:
@@ -327,6 +333,8 @@ class SettingsWindow:
 			self.model_var.set(models[0])
 
 	def _save(self) -> None:
+		# Валидируем параметры до сохранения, чтобы не стартовать backend
+		# с заведомо некорректной конфигурацией.
 		temperature = self._read_float(self.temperature_entry, "Temperature", 0.0, 2.0)
 		if temperature is None:
 			return
@@ -419,6 +427,8 @@ class SettingsWindow:
 
 
 class PageOracleApp:
+	"""Tkinter-приложение: слой UI поверх PageOracleBackend."""
+
 	@staticmethod
 	def _enable_entry_undo(entry: Entry) -> None:
 		try:
@@ -710,6 +720,7 @@ class PageOracleApp:
 		)
 
 	def _setup_text_editing(self) -> None:
+		"""Подключает горячие клавиши и контекстное меню для Entry/Text."""
 		self._context_target = None
 		self.text_context_menu = Menu(self.window, tearoff=0)
 		self.text_context_menu.add_command(label="Отменить", command=lambda: self._context_action("undo"))
@@ -780,6 +791,7 @@ class PageOracleApp:
 				widget.mark_set("insert", "end-1c")
 
 	def _show_text_context_menu(self, event):
+		"""Показывает единое контекстное меню для текущего текстового виджета."""
 		widget = self._resolve_text_widget(event)
 		if not isinstance(widget, (Entry, Text)):
 			return
@@ -888,6 +900,7 @@ class PageOracleApp:
 		self.canvas.itemconfig(self.status_dot, fill=color)
 
 	def _set_busy(self, busy: bool, message: str = "") -> None:
+		"""Переключает UI в занятое/свободное состояние на время фоновых задач."""
 		self.is_busy = busy
 		if busy:
 			self.btn_send.configure(state="disabled", bg=SURFACE)
@@ -931,6 +944,7 @@ class PageOracleApp:
 
 	def _run_in_thread(self, target, *args) -> None:
 		# Единая точка запуска фоновых задач для UI-операций.
+		# Все обновления виджетов из worker-потоков возвращаем через window.after.
 		threading.Thread(target=target, args=args, daemon=True).start()
 
 	def _apply_provider_env(self, settings: dict) -> None:
@@ -1033,6 +1047,7 @@ class PageOracleApp:
 		self.chat_text.configure(state="disabled")
 
 	def _ask_worker(self, question: str, mode: str) -> None:
+		"""Выполняет запрос к backend в фоновом потоке, не блокируя GUI."""
 		try:
 			if not self.backend:
 				raise RuntimeError("Бэкенд не инициализирован")
@@ -1044,6 +1059,7 @@ class PageOracleApp:
 			self.window.after(0, self._set_busy, False)
 
 	def _on_answer(self, answer: str) -> None:
+		"""Обрабатывает успешный ответ: чат, автосохранение истории и debug-лог."""
 		self._remove_thinking()
 		self._append_chat("PageOracle", answer, is_ai=True)
 		if self.backend:
