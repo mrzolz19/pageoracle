@@ -75,7 +75,7 @@ python gui.py
 
 <img width="1474" height="886" alt="Где находятся настройки" src="https://github.com/user-attachments/assets/d8cd1882-8e85-4054-8653-419e2f0f242c" />
 
-![1323](https://github.com/user-attachments/assets/75fbc1b6-02f0-4300-be9c-f9dd920cf482)
+<img width="853" height="1465" alt="Где находятся настройки" src="https://github.com/user-attachments/assets/75fbc1b6-02f0-4300-be9c-f9dd920cf482" />
 
 
 
