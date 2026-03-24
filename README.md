@@ -250,6 +250,8 @@ python gui.py
 <img width="2694" height="1859" alt="Снимок экрана 2026-03-23 175505" src="https://github.com/user-attachments/assets/b8774b22-78c2-41f8-9d32-e3c256c1e046" />
 <img width="2690" height="1860" alt="Снимок экрана 2026-03-23 175513" src="https://github.com/user-attachments/assets/9ad8becc-6383-4f29-ae8b-82156ac87387" />
 
+### Ошибки и как их решать:
+
 
 ## ⚙️Глава II. Как работает PageOracle
 ### Обработка и индексирование документов
