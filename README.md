@@ -358,9 +358,9 @@ PageOracle отвечает на вопросы по загруженным кн
    • analysis - цитаты + анализ.<br>
    • quote - точные цитаты с источниками.<br>
 
-Для работы программы мы использовали следующие библиотеки:
-LangChain, LangGraph, Chroma, BM25Retriever, sentence-transformers - для создания RAP pipeline и ИИ-агента с помощью графов
-Tkiner, FLask, HTML, JavaScript, CSS - для созданиия веб и настольного интерфейса
+Для работы программы мы использовали следующие библиотеки:<br>
+LangChain, LangGraph, Chroma, BM25Retriever, sentence-transformers - для создания RAP pipeline и ИИ-агента с помощью графов<br>
+Tkiner, FLask, HTML, JavaScript, CSS - для созданиия веб и настольного интерфейса<br>
 
 ### Подробное описание работы по шагам
 #### 1. Обработка и индексирование документов
