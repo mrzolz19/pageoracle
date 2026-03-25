@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PageOracle - AI Book Reader (Web)</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="desktopViewport" class="desktop-viewport">
+    <div id="desktopCanvas" class="desktop-canvas">
+      <div class="app-shell">
+        <aside class="sidebar">
+          <div class="logo">
+            <h1>PageOracle</h1>
+            <p>AI Book Reader</p>
+          </div>
+
+          <div class="divider"></div>
+
+          <button id="btnLoad" class="btn-load" type="button">
+            <span class="icon">+</span>
+            Загрузить книгу
+          </button>
+          <input id="bookInput" type="file" accept=".txt,text/plain" hidden>
+
+          <div class="section-label">Загруженные книги</div>
+          <div id="booksList" class="books-list"></div>
+
+          <div class="divider"></div>
+
+          <button id="btnSettings" class="btn-settings" type="button">
+            <span class="icon">⚙</span>
+            Настройки
+          </button>
+        </aside>
+
+        <main class="main-area">
+          <div class="header">
+            <h2>Чат с книгой</h2>
+            <div class="status">
+              <span id="statusDot" class="status-dot"></span>
+              <span id="statusText">Инициализация...</span>
+            </div>
+          </div>
+
+          <div class="mode-bar">
+            <span class="mode-label">Режим:</span>
+            <div class="mode-pills">
+              <button type="button" class="mode-pill" data-mode="auto">Авто</button>
+              <button type="button" class="mode-pill" data-mode="analysis">Анализ</button>
+              <button type="button" class="mode-pill" data-mode="quote">Поиск цитат</button>
+            </div>
+          </div>
+
+          <div id="chatContainer" class="chat-container"></div>
+
+          <div class="input-bar">
+            <input id="questionInput" class="input-field" type="text" placeholder="Задайте вопрос по загруженным книгам...">
+            <button id="btnSend" class="btn-send" type="button">▶</button>
+            <button id="btnClearChat" class="btn-clear" type="button" title="Очистить чат">🗑</button>
+            <button id="btnClearHistory" class="btn-clear" type="button" title="Очистить историю">🧠</button>
+          </div>
+
+          <div class="logs-section">
+            <div class="logs-header">
+              <span>Системные логи</span>
+              <button id="btnClearLogs" type="button">Очистить</button>
+            </div>
+            <div id="logsBox" class="logs-box"></div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <div id="settingsOverlay" class="settings-overlay hidden">
+    <div class="settings-card">
+      <h2>⚙ Настройки</h2>
+      <form id="settingsForm" novalidate>
+        <div class="form-group">
+          <label for="providerSelect">Провайдер ИИ</label>
+          <select id="providerSelect" class="form-select"></select>
+        </div>
+
+        <div class="form-group">
+          <label for="modelSelect">LLM модель</label>
+          <select id="modelSelect" class="form-select"></select>
+        </div>
+
+        <div class="form-group">
+          <label for="embeddingSelect">Embedding-модель</label>
+          <select id="embeddingSelect" class="form-select"></select>
+        </div>
+
+        <div class="form-group">
+          <label for="llmApiInput">API ключ от LLM</label>
+          <input id="llmApiInput" class="form-input" type="password" autocomplete="off">
+        </div>
+
+        <div class="form-group">
+          <label for="embeddingApiInput">API ключ embedding-модели</label>
+          <input id="embeddingApiInput" class="form-input" type="password" autocomplete="off">
+        </div>
+
+        <div class="form-group">
+          <label for="ycFolderInput">YC_FOLDER_ID (для YandexGPT)</label>
+          <input id="ycFolderInput" class="form-input" type="text" autocomplete="off">
+        </div>
+
+        <label class="checkbox-row" for="showKeysCheckbox">
+          <input id="showKeysCheckbox" type="checkbox">
+          Показать ключи
+        </label>
+
+        <div class="settings-grid">
+          <div class="form-group">
+            <label for="temperatureInput">Temperature</label>
+            <input id="temperatureInput" class="form-input" type="number" step="0.1" min="0" max="2">
+          </div>
+
+          <div class="form-group">
+            <label for="maxTokensInput">Max Tokens</label>
+            <input id="maxTokensInput" class="form-input" type="number" step="1" min="1">
+          </div>
+
+          <div class="form-group">
+            <label for="topPInput">Top P</label>
+            <input id="topPInput" class="form-input" type="number" step="0.05" min="0" max="1">
+          </div>
+
+          <div class="form-group">
+            <label for="scoreThresholdInput">Score Threshold</label>
+            <input id="scoreThresholdInput" class="form-input" type="number" step="0.05" min="0" max="1">
+          </div>
+        </div>
+
+        <div class="settings-btns">
+          <button id="btnCancelSettings" type="button" class="btn-cancel">Отмена</button>
+          <button type="submit" class="btn-save">💾 Сохранить</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
