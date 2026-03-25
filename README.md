@@ -121,7 +121,8 @@ python gui.py
 1.	Что такое GUI: Это визуальная «панель управления» программой, заменяющая сложные текстовые команды на кнопки и окна. В PageOracle он реализован на языке Python с помощью библиотеки Tkinter.
 
 ![ывыывы](https://github.com/user-attachments/assets/c1d01884-6a17-4200-a01b-bc03c4e27e97)
-<img width="1280" height="720" alt="Web GUI" src="https://github.com/user-attachments/assets/b5433723-bd4f-4cc3-9942-cd0b6c6241a7" />
+<img width="1280" height="720" alt="image" src="https://github.com/user-attachments/assets/fde12773-891a-44a1-b89e-733629d3ca72" />
+
 
 
 <ol start="2">
