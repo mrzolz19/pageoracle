@@ -83,7 +83,7 @@ python gui.py
 6. Открыть веб-интерфейс по ссылке http://127.0.0.1:5000 (он также отображается в терминале при запуске)
 7. Зайдите в настройки и выберите:
 
-<img width="983" height="277" alt="Где находятся настройки" src="https://github.com/user-attachments/assets/0f6e5e15-4140-4897-83e0-d0c4a8e8dcb3" />
+<img width="983" height="477" alt="Где находятся настройки" src="https://github.com/user-attachments/assets/0f6e5e15-4140-4897-83e0-d0c4a8e8dcb3" />
 <img width="874" height="446" alt="Где находятся настройки" src="https://github.com/user-attachments/assets/d8cd1882-8e85-4054-8653-419e2f0f242c" />
 
 
