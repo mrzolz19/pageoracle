@@ -3,6 +3,7 @@ exclude = [
     ".opencode/**",
     ".agents/**",
     "**/books/**",
+    "graphify-out/**",
     ".ruff_cache/**",
     ".rumdl_cache/**",
 ]

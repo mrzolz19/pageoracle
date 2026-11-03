@@ -11,6 +11,16 @@ venv/
 # Vector store database
 chroma_intro_db/
 
+# Runtime configuration and history (contains sensitive API keys)
+settings.json
+**/settings.json
+chat_history.json
+**/chat_history.json
+
+# Tool artifacts
+graphify-out/
+.graphifyignore
+
 # Local sample books duplicates
 **/books/**
 !web_gui_pageoracle/books/**

@@ -42,7 +42,6 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from pydantic import BaseModel, ConfigDict, Field
-from sentence_transformers import CrossEncoder
 
 RETRIEVER_K = 20
 RETRIEVER_FETCH_K = 50
@@ -562,6 +561,8 @@ class SimpleReranker:
         Args:
             model_name: Название модели cross-encoder
         """
+        from sentence_transformers import CrossEncoder
+
         self.model = CrossEncoder(model_name)
 
     def rerank(self, query: str, documents: list[Document], top_n: int = RERANK_TOP_K) -> list[Document]:
@@ -979,16 +980,24 @@ class PageOracleBackend:
     def _load_and_annotate(self, filepath: str) -> list:
         path = Path(filepath)
         book_title = path.stem.replace("_", " ").replace("-", " ")
-        try:
-            raw_docs = TextLoader(str(path), encoding="utf-8").load()
-        except (RuntimeError, UnicodeDecodeError):
+        raw_docs = None
+        for enc in ("utf-8", "cp1251"):
             try:
-                raw_docs = TextLoader(str(path), encoding="cp1251").load()
+                raw_docs = TextLoader(str(path), encoding=enc).load()
+                break
             except (RuntimeError, UnicodeDecodeError):
+                continue
+
+        if raw_docs is None:
+            try:
                 raw = path.read_bytes()
                 det = chardet.detect(raw[:50000])
                 enc = det.get("encoding") or "utf-8"
                 raw_docs = TextLoader(str(path), encoding=enc).load()
+            except Exception as err:
+                self.log(f"[!] Не удалось прочитать «{path.name}»: {err}")
+                return []
+
         annotated = annotate_book(raw_docs, book_title)
         normalized_source = self._normalize_source_path(path)
         for doc in annotated:

@@ -21,6 +21,8 @@ Before proposing plans or changes, consult the Table of Contents and relevant do
 | D-002 | 2026-11-03 | workflow | Configure ty allowed-unresolved-imports for project dependencies | Active |
 | D-003 | 2026-11-03 | rag-pipeline | Fix PyTorch CUDA 12.8 wheel ABI and pin reproducible dependencies | Active |
 | D-004 | 2026-11-03 | data | Exclude dependency manifests and fallback to adjacent books directory | Active |
+| D-005 | 2026-11-04 | architecture | Custom OpenAI-compatible providers, free-form models, and decoupled embeddings | Active |
+| D-006 | 2026-11-04 | data | Security gitignore for runtime settings and resilient book encoding fallback | Active |
 
 ---
 
@@ -64,6 +66,26 @@ Before proposing plans or changes, consult the Table of Contents and relevant do
 **Why:** User requested fixing false positive indexing on `requirements.txt` and ensuring books in `books/` are recognized and indexed on first launch.
 **Why it should work:** Eliminates false indexing of dependency manifests, resolves proper book directories automatically, fixes multilingual typo gate failures, and preserves bit-for-bit sync across both GUIs.
 **Affects:** `web_gui_pageoracle/main.py`, `tkinter_gui/main.py`, `typos.toml`, `.rumdl.toml`, `pyproject.toml`, `.gitignore`, `README.md`.
+**Status:** Active
+
+## D-005. Custom Providers, Free-Form Models, and Decoupled Embeddings (2026-11-04)
+
+**Question:** How to enable unlimited custom AI providers, free-form LLM and embedding model entry, and flexible embedding routing across Web and Tkinter GUIs.
+**Options:** Strict hardcoded dictionaries vs extensible provider registry in settings.json with OpenAI-compatible Chat/Embeddings fallback; coupled LLM/Embedding endpoints vs decoupled configuration with an optional sync toggle.
+**Chosen:** Extensible `custom_providers` list in `settings.json`, OpenAI-compatible endpoints for custom LLM (`ChatOpenAI`) and embeddings, free-form model entry via editable comboboxes and HTML datalists, with decoupled embedding settings and a "same as LLM" sync toggle.
+**Why:** User requested unlimited custom providers (name, endpoint, api_key, model, embedding_model), arbitrary model entry for built-in providers, separate embedding settings, and a synchronization toggle when LLM and embeddings share the same provider/endpoint.
+**Why it should work:** OpenAI API format is the universal standard across self-hosted and cloud LLM/embedding servers (Ollama, vLLM, LM Studio, LiteLLM); datalists and normal comboboxes preserve autocomplete suggestions while permitting arbitrary user input; decoupled settings allow mixing local embeddings with remote LLMs.
+**Affects:** `settings.json`, `web_gui_pageoracle/main.py`, `tkinter_gui/main.py`, `web_gui_pageoracle/gui.py`, `tkinter_gui/gui.py`, `web_gui_pageoracle/templates/index.html`, `web_gui_pageoracle/static/app.js`, `web_gui_pageoracle/static/style.css`.
+**Status:** Active
+
+## D-006. Security Gitignore for Settings and Resilient Book Ingestion (2026-11-04)
+
+**Question:** How to prevent accidental commit of live API keys in `settings.json` and protect book loading against unhandled decoding crashes.
+**Options:** Rely on manual omission during staging vs automate git and linter exclusion; fail-fast on malformed book files vs multi-tier encoding fallback with graceful error recovery.
+**Chosen:** Add `settings.json`, `chat_history.json`, and `graphify-out` to `.gitignore` and `.rumdl.toml`; wrap tier-3 chardet encoding in `_load_and_annotate` with exception logging returning `[]`; defer heavy `CrossEncoder` import to `SimpleReranker.__init__`.
+**Why:** Prevents secret leakage to source control, ensures quality gates pass cleanly without unmonitored tool artifacts, eliminates app startup crashes on corrupted book files, and avoids high CUDA commit spikes during tests.
+**Why it should work:** Gitignore blocks tracking of credential files; graceful exception handling prevents an unreadable file from breaking full library ingestion; lazy import decouples testing from PyTorch CUDA initialization.
+**Affects:** `.gitignore`, `.rumdl.toml`, `web_gui_pageoracle/main.py`, `tkinter_gui/main.py`, `tests/test_book_indexing.py`.
 **Status:** Active
 
 ---

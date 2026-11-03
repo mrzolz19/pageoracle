@@ -90,6 +90,18 @@ class TestBookIndexing(unittest.TestCase):
                 self.assertGreater(len(backend.loaded_books), 0)
                 self.assertGreater(len(backend.splits), 0)
 
+    def test_load_and_annotate_handles_corrupt_file_gracefully(self) -> None:
+        """Verify that an unreadable or corrupt file does not raise an unhandled exception."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            bad_file = Path(tmp_dir) / "corrupt_book.txt"
+            # Write invalid bytes that cannot be decoded as utf-8 or cp1251
+            bad_file.write_bytes(b"\x80\x81\xff\xfe\x00\x01\x82\x83" * 100)
+
+            backend = web_main.PageOracleBackend(books_dir=tmp_dir)
+            annotated = backend._load_and_annotate(str(bad_file))
+            # Graceful failure returns empty list or valid document list without raising
+            self.assertIsInstance(annotated, list)
+
 
 if __name__ == "__main__":
     unittest.main()
