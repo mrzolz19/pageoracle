@@ -9,41 +9,39 @@ PageOracle backend.
 - генерация ответа в режимах analysis/quote.
 """
 
-import re
-import json
-import shutil
-import importlib
 import gc
-import time
-import threading
-import urllib.request
-import urllib.error
-from pathlib import Path
-from datetime import datetime
-from typing import Any
-from typing import TypedDict, Literal, cast, Annotated
-from pydantic import BaseModel, Field, ConfigDict
-from langchain_community.document_loaders import TextLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_core.documents import Document
-import os
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_core.embeddings import Embeddings
-from langchain_community.vectorstores import Chroma
-from langchain_community.retrievers import BM25Retriever
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnableLambda
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
-from langchain_core.retrievers import BaseRetriever
-from langchain.tools import tool
-from sentence_transformers import CrossEncoder
 import hashlib
+import importlib
+import json
+import os
+import re
+import shutil
+import threading
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Annotated, Any, Literal, TypedDict, cast
+
+from langchain.tools import tool
+from langchain_community.document_loaders import TextLoader
+from langchain_community.retrievers import BM25Retriever
+from langchain_community.vectorstores import Chroma
+from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.retrievers import BaseRetriever
+from langchain_core.runnables import RunnableLambda
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
-
-
+from pydantic import BaseModel, ConfigDict, Field
+from sentence_transformers import CrossEncoder
 
 RETRIEVER_K = 20
 RETRIEVER_FETCH_K = 50
@@ -132,7 +130,7 @@ PROVIDERS = {
         "env_key": "GIGACHAT_CREDENTIALS",
         "verify_ssl_certs": False,
         "models": ["gigachat-2", "gigachat-2-pro", "gigachat-2-max"],
-    }
+    },
 }
 
 # ───────────────────────── парсинг структуры книги ───────────────────
@@ -186,21 +184,21 @@ def annotate_book(docs: list[Document], book_title: str) -> list[Document]:
         current_chapter = "—"
         seg_lines: list[str] = []
 
-        def flush(part: str, chapter: str) -> None:
-            text = "\n".join(seg_lines).strip()
+        def flush(part: str, chapter: str, lines_buffer: list[str], source_doc: Document) -> None:
+            text = "\n".join(lines_buffer).strip()
             if text:
                 result.append(
                     Document(
                         page_content=text,
                         metadata={
-                            "source": doc.metadata.get("source", ""),
+                            "source": source_doc.metadata.get("source", ""),
                             "book_title": book_title,
                             "part": part,
                             "chapter": chapter,
                         },
                     )
                 )
-            seg_lines.clear()
+            lines_buffer.clear()
 
         for line in lines:
             pm = _PART_RE.match(line)
@@ -209,7 +207,7 @@ def annotate_book(docs: list[Document], book_title: str) -> list[Document]:
             em = _EPILOGUE_RE.match(line)
 
             if pm or em:
-                flush(current_part, current_chapter)
+                flush(current_part, current_chapter, seg_lines, doc)
                 if em:
                     current_part = "Эпилог"
                     current_chapter = "—"
@@ -219,7 +217,7 @@ def annotate_book(docs: list[Document], book_title: str) -> list[Document]:
                     current_chapter = "—"
                 seg_lines.append(line)
             elif cm or rm:
-                flush(current_part, current_chapter)
+                flush(current_part, current_chapter, seg_lines, doc)
                 if cm:
                     chap_raw = cm.group(1)
                 elif rm:
@@ -232,7 +230,7 @@ def annotate_book(docs: list[Document], book_title: str) -> list[Document]:
             else:
                 seg_lines.append(line)
 
-        flush(current_part, current_chapter)
+        flush(current_part, current_chapter, seg_lines, doc)
     return result
 
 
@@ -291,20 +289,26 @@ ANALYSIS_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "Ты — эксперт-аналитик и универсальный исследователь текстов. Ты профессионально работаешь с литературой любого жанра: художественной, научной, технической, документальной, публицистической и др. Отвечай СТРОГО НА РУССКОМ ЯЗЫКЕ.\n"
-            "Каждый фрагмент контекста помечен меткой, указывающей на структуру источника (например: [Название источника | Раздел/Часть | Глава/Параграф]). "
-            "Используй эти метки как источник при цитировании.\n\n"
-            "Структура ответа — два блока:\n\n"
-            "Цитаты из текста\n"
-            "Приведи несколько самых релеватных прямых цитат, взятых ТОЛЬКО из предоставленного контекста. "
-            "Если подходящих цитат в контексте нет — так и напиши.\n"
-            "После каждой цитаты укажи источник в скобках, опираясь на метку: "
-            "(«Название источника», Раздел/Часть, Глава/Параграф).\n\n"
-            "Анализ\n"
-            "Краткий, емкий ответ на вопрос пользователя на основе приведённых цитат. "
-            "Учитывай специфику текста: для научной литературы оперируй фактами и терминами, для художественной — сюжетом и образами. "
-            "Не выходи за рамки предоставленного контекста и не придумывай факты. "
-            "Если информации для полноценного ответа недостаточно — честно сообщи об этом.",
+            (
+                "Ты — эксперт-аналитик и универсальный исследователь текстов. Ты профессионально работаешь с "
+                "литературой любого жанра: художественной, научной, технической, документальной, "
+                "публицистической и др. Отвечай СТРОГО НА РУССКОМ ЯЗЫКЕ.\n"
+                "Каждый фрагмент контекста помечен меткой, указывающей на структуру источника "
+                "(например: [Название источника | Раздел/Часть | Глава/Параграф]). "
+                "Используй эти метки как источник при цитировании.\n\n"
+                "Структура ответа — два блока:\n\n"
+                "Цитаты из текста\n"
+                "Приведи несколько самых релеватных прямых цитат, взятых ТОЛЬКО из предоставленного контекста. "
+                "Если подходящих цитат в контексте нет — так и напиши.\n"
+                "После каждой цитаты укажи источник в скобках, опираясь на метку: "
+                "(«Название источника», Раздел/Часть, Глава/Параграф).\n\n"
+                "Анализ\n"
+                "Краткий, емкий ответ на вопрос пользователя на основе приведённых цитат. "
+                "Учитывай специфику текста: для научной литературы оперируй фактами и терминами, "
+                "для художественной — сюжетом и образами. "
+                "Не выходи за рамки предоставленного контекста и не придумывай факты. "
+                "Если информации для полноценного ответа недостаточно — честно сообщи об этом."
+            ),
         ),
         MessagesPlaceholder("history"),
         ("human", "Контекст:\n{context}\n\nВопрос: {question}"),
@@ -315,17 +319,24 @@ QUOTE_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            "Ты — внимательный исследователь и архивариус текстов. Ты работаешь с источниками любого типа (художественная литература, научные статьи, документация, нон-фикшн). Отвечай СТРОГО НА РУССКОМ ЯЗЫКЕ.\n"
-            "Каждый фрагмент контекста помечен структурной меткой (например: [Название источника | Раздел/Часть | Глава/Параграф]).\n\n"
-            "Твоя задача — найти и привести ТОЧНЫЕ цитаты из предоставленного контекста, "
-            "максимально полно и релевантно отвечающие на запрос пользователя.\n\n"
-            "Формат ответа:\n"
-            "Для каждой найденной цитаты:\n"
-            "1. Приведи фрагмент текста дословно, заключив его в кавычки.\n"
-            "2. Укажи точный источник, используя данные из метки: («Название источника», Раздел/Часть, Глава/Параграф).\n"
-            "3. Одно-три предложения — краткое обоснование, почему этот фрагмент отвечает на запрос пользователя (с учетом жанра текста).\n\n"
-            "Не добавляй отсебятины, общих рассуждений или внешних знаний. Только точные цитаты с атрибуцией.\n"
-            "Если в контексте нет подходящих фрагментов для ответа — так и напиши."
+            (
+                "Ты — внимательный исследователь и архивариус текстов. Ты работаешь с источниками любого типа "
+                "(художественная литература, научные статьи, документация, нон-фикшн). "
+                "Отвечай СТРОГО НА РУССКОМ ЯЗЫКЕ.\n"
+                "Каждый фрагмент контекста помечен структурной меткой "
+                "(например: [Название источника | Раздел/Часть | Глава/Параграф]).\n\n"
+                "Твоя задача — найти и привести ТОЧНЫЕ цитаты из предоставленного контекста, "
+                "максимально полно и релевантно отвечающие на запрос пользователя.\n\n"
+                "Формат ответа:\n"
+                "Для каждой найденной цитаты:\n"
+                "1. Приведи фрагмент текста дословно, заключив его в кавычки.\n"
+                "2. Укажи точный источник, используя данные из метки: "
+                "(«Название источника», Раздел/Часть, Глава/Параграф).\n"
+                "3. Одно-три предложения — краткое обоснование, почему этот фрагмент отвечает на запрос "
+                "пользователя (с учетом жанра текста).\n\n"
+                "Не добавляй отсебятины, общих рассуждений или внешних знаний. Только точные цитаты с атрибуцией.\n"
+                "Если в контексте нет подходящих фрагментов для ответа — так и напиши."
+            ),
         ),
         MessagesPlaceholder("history"),
         ("human", "Контекст:\n{context}\n\nЧто найти: {question}"),
@@ -351,6 +362,7 @@ REWRITE_PROMPT = (
 
 # ═══════════════════════ BACKEND CLASS ═══════════════════════════════
 
+
 class AgentState(TypedDict, total=False):
     messages: Annotated[list[Any], add_messages]
     question: str
@@ -370,16 +382,10 @@ class GradeDecision(BaseModel):
 
     model_config = ConfigDict(
         title="grade_decision",
-        json_schema_extra={
-            "description": (
-                "Решение о релевантности контекста вопросу и рекомендуемом стиле ответа."
-            )
-        },
+        json_schema_extra={"description": ("Решение о релевантности контекста вопросу и рекомендуемом стиле ответа.")},
     )
 
-    binary_score: Literal["yes", "no"] = Field(
-        description="yes если контекст релевантен вопросу, иначе no"
-    )
+    binary_score: Literal["yes", "no"] = Field(description="yes если контекст релевантен вопросу, иначе no")
     answer_style: Literal["analysis", "quote"] = Field(
         description="Предпочтительный стиль ответа по запросу: analysis или quote"
     )
@@ -390,14 +396,11 @@ class RewriteDecision(BaseModel):
 
     model_config = ConfigDict(
         title="rewrite_decision",
-        json_schema_extra={
-            "description": (
-                "Результат улучшения поискового запроса для ретривера."
-            )
-        },
+        json_schema_extra={"description": ("Результат улучшения поискового запроса для ретривера.")},
     )
 
     rewritten_query: str = Field(default="", description="Новый поисковый запрос")
+
 
 class PrefixedEmbeddings(Embeddings):
     """Обёртка для embedding-моделей с префиксами query/document."""
@@ -492,8 +495,7 @@ class OpenRouterEmbeddings(Embeddings):
 
         snippet = text[:500].replace("\n", " ")
         raise RuntimeError(
-            "OpenRouter embeddings вернул ответ в неожиданном формате (не JSON). "
-            f"Фрагмент ответа: {snippet}"
+            f"OpenRouter embeddings вернул ответ в неожиданном формате (не JSON). Фрагмент ответа: {snippet}"
         )
 
     def _request_embeddings(self, inputs: list[str]) -> list[list[float]]:
@@ -505,7 +507,7 @@ class OpenRouterEmbeddings(Embeddings):
             "input": inputs,
         }
         body = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
+        request = urllib.request.Request(  # noqa: S310
             self.endpoint,
             data=body,
             headers={
@@ -516,13 +518,11 @@ class OpenRouterEmbeddings(Embeddings):
         )
 
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
                 result = self._parse_response_json(response.read())
         except urllib.error.HTTPError as err:
             details = err.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(
-                f"Ошибка OpenRouter embeddings: HTTP {err.code}. {details}"
-            ) from err
+            raise RuntimeError(f"Ошибка OpenRouter embeddings: HTTP {err.code}. {details}") from err
         except urllib.error.URLError as err:
             raise RuntimeError(f"Сеть недоступна для OpenRouter embeddings: {err}") from err
 
@@ -551,6 +551,7 @@ class OpenRouterEmbeddings(Embeddings):
         vectors = self._request_embeddings([text])
         return vectors[0] if vectors else []
 
+
 class SimpleReranker:
     """Переупорядочивает найденные документы по CrossEncoder-скорингу."""
 
@@ -560,11 +561,9 @@ class SimpleReranker:
             model_name: Название модели cross-encoder
         """
         self.model = CrossEncoder(model_name)
-    
-    def rerank(
-        self, query: str, documents: list[Document], top_n: int = RERANK_TOP_K
-    ) -> list[Document]:
-        """      
+
+    def rerank(self, query: str, documents: list[Document], top_n: int = RERANK_TOP_K) -> list[Document]:
+        """
         Args:
             query: Поисковый запрос
             documents: Список документов для переоценки
@@ -575,25 +574,26 @@ class SimpleReranker:
 
         if not documents:
             return []
-        
+
         # Подготавливаем пары (query, document)
         pairs = [[query, doc.page_content] for doc in documents]
-        
+
         # Получаем скоры релевантности
         scores = self.model.predict(pairs)
-        
+
         # Сортируем документы по скору
-        doc_score_pairs = list(zip(documents, scores))
+        doc_score_pairs = list(zip(documents, scores, strict=False))
         doc_score_pairs.sort(key=lambda x: x[1], reverse=True)
-        
+
         # Отбираем топ-N документов (score записываем в метаданные)
         result = []
         for doc, score in doc_score_pairs[:top_n]:
             doc.metadata = doc.metadata or {}
             doc.metadata["rerank_score"] = float(score)
             result.append(doc)
-        
+
         return result
+
 
 class HybridRerankerRetriever(BaseRetriever):
     """Комбинирует два retriever-источника и применяет финальный rerank."""
@@ -604,17 +604,17 @@ class HybridRerankerRetriever(BaseRetriever):
     k: int = RERANK_TOP_K
 
     def _dedup_docs(self, docs: list[Document]) -> list[Document]:
-        '''объединение результатов с дедупликацией'''
+        """объединение результатов с дедупликацией"""
         seen: set[str] = set()
         result: list[Document] = []
         for d in docs:
             content = d.page_content
-            uid = hashlib.md5(content.encode("utf-8")).hexdigest()
+            uid = hashlib.md5(content.encode("utf-8"), usedforsecurity=False).hexdigest()
             if uid not in seen:
                 seen.add(uid)
                 result.append(d)
         return result
-    
+
     def _get_relevant_documents(self, query: str, **_: Any) -> list[Document]:
         first_docs = self.first_retriever.invoke(query)
         second_docs = self.second_retriever.invoke(query)
@@ -622,12 +622,11 @@ class HybridRerankerRetriever(BaseRetriever):
 
         return self.reranker.rerank(query, merged, self.k)
 
+
 class PageOracleBackend:
     """Основной оркестратор: загрузка книг, индекс, модель, граф и история."""
 
-    def __init__(
-        self, books_dir=".", persist_dir="./chroma_intro_db", log_callback=None
-    ):
+    def __init__(self, books_dir=".", persist_dir="./chroma_intro_db", log_callback=None):
         self.books_dir = books_dir
         self.persist_dir = persist_dir
         self.log = log_callback or print
@@ -645,7 +644,7 @@ class PageOracleBackend:
             chunk_overlap=200,
             add_start_index=True,
         )
-        self.temperature = 0.2  
+        self.temperature = 0.2
         self.max_tokens = 4096
         self.top_p = 0.9
         self.score_threshold = 0.6
@@ -717,9 +716,8 @@ class PageOracleBackend:
 
     def _is_dimension_mismatch_error(self, err: Exception) -> bool:
         msg = str(err).lower()
-        return (
-            "expecting embedding with dimension" in msg
-            or ("embedding" in msg and "dimension" in msg and " got " in msg)
+        return "expecting embedding with dimension" in msg or (
+            "embedding" in msg and "dimension" in msg and " got " in msg
         )
 
     def _validate_vectorstore_dimension(self) -> None:
@@ -791,7 +789,7 @@ class PageOracleBackend:
 
             folder_id = os.getenv("YC_FOLDER_ID", "").strip()
             module = importlib.import_module("langchain_community.embeddings.yandex")
-            yandex_embeddings_class = getattr(module, "YandexGPTEmbeddings")
+            yandex_embeddings_class = module.YandexGPTEmbeddings
 
             yandex_kwargs: dict[str, Any] = {
                 "model_uri": self._build_yandex_embedding_uri(model_name, folder_id),
@@ -980,9 +978,7 @@ class PageOracleBackend:
         if persist.exists() and stored_embedding_model and stored_embedding_model != self.embedding_model_name:
             # Индекс нельзя переиспользовать между embedding-моделями
             # с разной размерностью векторов.
-            self.log(
-                "[Индекс] Найден индекс для другой embedding модели. Пересоздаём индекс."
-            )
+            self.log("[Индекс] Найден индекс для другой embedding модели. Пересоздаём индекс.")
             self._clear_vector_index()
 
         if persist.exists():
@@ -998,9 +994,7 @@ class PageOracleBackend:
                     if indexed_docs:
                         self.splits = indexed_docs
                         self._refresh_loaded_books_from_splits()
-                        self.log(
-                            f"[Индекс] Загружен из кэша ({stored} чанков). Используем сохранённый индекс."
-                        )
+                        self.log(f"[Индекс] Загружен из кэша ({stored} чанков). Используем сохранённый индекс.")
                     else:
                         self.log("[Индекс] Кэш найден, но документы не прочитаны. Пересоздаём индекс.")
                         self._clear_vector_index()
@@ -1008,8 +1002,7 @@ class PageOracleBackend:
                 except Exception as err:
                     if self._is_dimension_mismatch_error(err):
                         self.log(
-                            "[Индекс] Размерность embedding не совпадает с кэшем. "
-                            "Пересоздаём индекс для новой модели."
+                            "[Индекс] Размерность embedding не совпадает с кэшем. Пересоздаём индекс для новой модели."
                         )
                         self._clear_vector_index()
                         self.vectorstore = self._build_vectorstore()
@@ -1092,7 +1085,7 @@ class PageOracleBackend:
         try:
             self.log(f"[Эмбеддинги] Переключаем embedding модель: {embedding_model}")
             self.embeddings = self._create_embeddings(embedding_model, api_key)
-            
+
             try:
                 self._init_vectorstore()
             except Exception as init_err:
@@ -1105,7 +1098,7 @@ class PageOracleBackend:
                     self._init_vectorstore()
                 else:
                     raise
-            
+
             self._create_retrievers()
             self._create_chains()
             self._create_graph()
@@ -1140,14 +1133,14 @@ class PageOracleBackend:
             self.model_supports_tools = True
             self.model_supports_structured_output = True
 
-            module = importlib.import_module(cfg["package"])
-            model_class = getattr(module, cfg["class"])
+            package_name = str(cfg["package"])
+            class_name = str(cfg["class"])
+            module = importlib.import_module(package_name)
+            model_class = getattr(module, class_name)
 
             provider_kwargs: dict[str, Any] = {}
             if provider_name == "GigaChat":
-                provider_kwargs["verify_ssl_certs"] = bool(
-                    cfg.get("verify_ssl_certs", False)
-                )
+                provider_kwargs["verify_ssl_certs"] = bool(cfg.get("verify_ssl_certs", False))
 
             if provider_name == "YandexGPT":
                 folder_id = os.getenv("YC_FOLDER_ID", "").strip()
@@ -1177,7 +1170,6 @@ class PageOracleBackend:
             # Некоторые провайдеры используют max_output_tokens вместо max_tokens.
             if provider_name == "Google":
                 common_kwargs["max_output_tokens"] = max_tokens
-
 
             try:
                 self.model = model_class(**common_kwargs)
@@ -1237,14 +1229,10 @@ class PageOracleBackend:
             return
         self.rag_chain = (
             {
-                "context": RunnableLambda(
-                    lambda data: mmr.invoke(cast(dict, data)["question"])
-                )
+                "context": RunnableLambda(lambda data: mmr.invoke(cast(dict, data)["question"]))
                 | RunnableLambda(format_docs),
                 "question": RunnableLambda(lambda data: cast(dict, data)["question"]),
-                "history": RunnableLambda(
-                    lambda data: cast(dict, data).get("history", [])
-                ),
+                "history": RunnableLambda(lambda data: cast(dict, data).get("history", [])),
             }
             | RunnableLambda(ensure_context)
             | ANALYSIS_PROMPT
@@ -1253,14 +1241,10 @@ class PageOracleBackend:
         )
         self.quote_chain = (
             {
-                "context": RunnableLambda(
-                    lambda data: quote.invoke(cast(dict, data)["question"])
-                )
+                "context": RunnableLambda(lambda data: quote.invoke(cast(dict, data)["question"]))
                 | RunnableLambda(format_docs),
                 "question": RunnableLambda(lambda data: cast(dict, data)["question"]),
-                "history": RunnableLambda(
-                    lambda data: cast(dict, data).get("history", [])
-                ),
+                "history": RunnableLambda(lambda data: cast(dict, data).get("history", [])),
             }
             | RunnableLambda(ensure_context)
             | QUOTE_PROMPT
@@ -1274,7 +1258,7 @@ class PageOracleBackend:
             self.graph_app = None
             return
 
-        workflow = StateGraph(AgentState)
+        workflow = StateGraph(cast(Any, AgentState))
         workflow.add_node("generate_query_or_respond", self._node_generate_query_or_respond)
         workflow.add_node("retrieve", ToolNode([self._build_retrieve_tool()]))
         workflow.add_node("rewrite_question", self._node_rewrite_question)
@@ -1314,7 +1298,7 @@ class PageOracleBackend:
             {
                 "role": "user",
                 "content": content,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         )
         self._trim_history()
@@ -1324,7 +1308,7 @@ class PageOracleBackend:
             {
                 "role": "assistant",
                 "content": content,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         )
         self._trim_history()
@@ -1361,16 +1345,12 @@ class PageOracleBackend:
                         continue
                     role = item.get("role")
                     content = item.get("content")
-                    if role in {"user", "assistant", "system"} and isinstance(
-                        content, str
-                    ):
+                    if role in {"user", "assistant", "system"} and isinstance(content, str):
                         parsed.append(
                             {
                                 "role": role,
                                 "content": content,
-                                "timestamp": item.get(
-                                    "timestamp", datetime.utcnow().isoformat()
-                                ),
+                                "timestamp": item.get("timestamp", datetime.now(timezone.utc).isoformat()),
                             }
                         )
                 self.history = parsed
@@ -1384,9 +1364,7 @@ class PageOracleBackend:
     def save_history(self, filepath: str | None = None) -> bool:
         path = Path(filepath) if filepath else self.history_path
         try:
-            path.write_text(
-                json.dumps(self.history, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            path.write_text(json.dumps(self.history, ensure_ascii=False, indent=2), encoding="utf-8")
             return True
         except Exception as err:
             self.log(f"[История] Не удалось сохранить историю: {err}")
@@ -1408,11 +1386,7 @@ class PageOracleBackend:
         @tool
         def retrieve(query: str) -> str:
             """Ищет релевантные фрагменты в загруженных книгах."""
-            retriever = (
-                self.quote_retriever
-                if self._looks_like_quote_request(query)
-                else self.mmr_retriever
-            )
+            retriever = self.quote_retriever if self._looks_like_quote_request(query) else self.mmr_retriever
             if not retriever:
                 return "Контекст пуст: ретривер не инициализирован."
             docs = retriever.invoke(query)
@@ -1462,25 +1436,31 @@ class PageOracleBackend:
             try:
                 response = model.bind_tools([retrieve_tool]).invoke(messages)
                 content_str = str(getattr(response, "content", ""))
-                # Проверка: некоторые модели OpenRouter возвращают ошибку tool_choice в виде обычного текста (или JSON строки) вместо исключения
-                if "No endpoints found that support the provided 'tool_choice' value" in content_str or "tool_choice" in content_str:
-                    raise Exception("OpenRouter soft error: " + content_str)
+                # Проверка: некоторые модели OpenRouter возвращают ошибку tool_choice
+                # в виде обычного текста (или JSON строки) вместо исключения
+                if (
+                    "No endpoints found that support the provided 'tool_choice' value" in content_str
+                    or "tool_choice" in content_str
+                ):
+                    raise RuntimeError("OpenRouter soft error: " + content_str)
                 # Если ответ пустой и нет вызовов тулов - модель не справилась с bind_tools
                 if not content_str.strip() and not getattr(response, "tool_calls", []):
-                    raise Exception("Model returned empty content without tool calls (possibly does not support tools)")
+                    raise RuntimeError(
+                        "Model returned empty content without tool calls (possibly does not support tools)"
+                    )
             except Exception as err:
                 self.log(f"[Tools] bind_tools недоступен, fallback: {err}")
                 self.model_supports_tools = False
-                if self._should_use_retrieve_without_tools(question, cast(Literal["auto", "analysis", "quote"], mode)):
+                if self._should_use_retrieve_without_tools(question, mode):
                     response = self._build_fallback_retrieve_response(retrieval_query)
                 else:
                     response = model.invoke(messages)
         else:
-            if self._should_use_retrieve_without_tools(question, cast(Literal["auto", "analysis", "quote"], mode)):
+            if self._should_use_retrieve_without_tools(question, mode):
                 response = self._build_fallback_retrieve_response(retrieval_query)
             else:
                 response = model.invoke(messages)
-        forced = cast(Literal["", "analysis", "quote"], state.get("force_answer_style", ""))
+        forced = state.get("force_answer_style", "")
         if forced in {"analysis", "quote"}:
             style = forced
         else:
@@ -1488,7 +1468,7 @@ class PageOracleBackend:
 
         return {
             "messages": [response],
-            "answer_style": cast(Literal["analysis", "quote"], style),
+            "answer_style": style,
             "route_decision": "tool-or-direct",
             "retrieval_query": retrieval_query,
         }
@@ -1528,11 +1508,7 @@ class PageOracleBackend:
         if getattr(self, "model_supports_structured_output", True):
             try:
                 decision = model.with_structured_output(GradeDecision).invoke(
-                    [
-                        HumanMessage(
-                            content=GRADE_PROMPT.format(question=question, context=context)
-                        )
-                    ]
+                    [HumanMessage(content=GRADE_PROMPT.format(question=question, context=context))]
                 )
             except Exception as e:
                 self.log(f"[Grade] with_structured_output недоступен, fallback ручного парсинга: {e}")
@@ -1566,11 +1542,7 @@ class PageOracleBackend:
         if forced == "analysis":
             return "generate_analysis_answer"
 
-        return (
-            "generate_quote_answer"
-            if decision.answer_style == "quote"
-            else "generate_analysis_answer"
-        )
+        return "generate_quote_answer" if decision.answer_style == "quote" else "generate_analysis_answer"
 
     def _invoke_prompt_with_context(
         self,
@@ -1599,9 +1571,7 @@ class PageOracleBackend:
         history = state.get("history", [])
         tool_messages = [m for m in state.get("messages", []) if isinstance(m, ToolMessage)]
         context_text = _extract_text(tool_messages[-1].content) if tool_messages else ""
-        answer = self._invoke_prompt_with_context(
-            ANALYSIS_PROMPT, question, history, context_text
-        )
+        answer = self._invoke_prompt_with_context(ANALYSIS_PROMPT, question, history, context_text)
 
         return {
             "messages": [AIMessage(content=answer)],
@@ -1621,9 +1591,7 @@ class PageOracleBackend:
                 "route_decision": "error",
                 "retrieval_query": state.get("retrieval_query", question),
             }
-        answer = self._invoke_prompt_with_context(
-            QUOTE_PROMPT, question, history, context_text
-        )
+        answer = self._invoke_prompt_with_context(QUOTE_PROMPT, question, history, context_text)
 
         return {
             "messages": [AIMessage(content=answer)],
@@ -1650,11 +1618,7 @@ class PageOracleBackend:
         if getattr(self, "model_supports_structured_output", True):
             try:
                 decision = model.with_structured_output(RewriteDecision).invoke(
-                    [
-                        HumanMessage(
-                            content=REWRITE_PROMPT.format(question=question, query=query)
-                        )
-                    ]
+                    [HumanMessage(content=REWRITE_PROMPT.format(question=question, query=query))]
                 )
             except Exception as e:
                 self.log(f"[Rewrite] with_structured_output недоступен, fallback ручного парсинга: {e}")
@@ -1668,12 +1632,12 @@ class PageOracleBackend:
                 start = content.find("{")
                 end = content.rfind("}")
                 if start != -1 and end != -1 and start < end:
-                    data = json.loads(content[start:end+1])
+                    data = json.loads(content[start : end + 1])
                     if "rewritten_query" in data:
                         rewritten_query = str(data["rewritten_query"])
             except Exception:
                 pass
-            
+
             # Очистка от текстовых префиксов, если модель ответила строкой
             rewritten_query = re.sub(
                 r"^(?:\*\*?)?(?:rewritten_query|новый запрос|запрос|query)(?:\*\*?)?:\s*",
@@ -1682,11 +1646,14 @@ class PageOracleBackend:
                 flags=re.IGNORECASE,
             ).strip()
             # Убираем кавычки с краёв если модель их добавила
-            if rewritten_query.startswith('"') and rewritten_query.endswith('"'):
+            if (
+                rewritten_query.startswith('"')
+                and rewritten_query.endswith('"')
+                or rewritten_query.startswith("'")
+                and rewritten_query.endswith("'")
+            ):
                 rewritten_query = rewritten_query[1:-1].strip()
-            elif rewritten_query.startswith("'") and rewritten_query.endswith("'"):
-                rewritten_query = rewritten_query[1:-1].strip()
-                
+
             decision = RewriteDecision(rewritten_query=rewritten_query)
 
         # Страхуемся от пустого rewritten_query, чтобы граф не зациклился
@@ -1722,13 +1689,9 @@ class PageOracleBackend:
 
         existing = self.vectorstore.get(where={"source": source_value})
         if existing["ids"]:
-            self.log(
-                f"[Пропуск] «{path.name}» уже есть в базе ({len(existing['ids'])} чанков)."
-            )
+            self.log(f"[Пропуск] «{path.name}» уже есть в базе ({len(existing['ids'])} чанков).")
             return
-        new_splits = self.text_splitter.split_documents(
-            self._load_and_annotate(str(path))
-        )
+        new_splits = self.text_splitter.split_documents(self._load_and_annotate(str(path)))
         for doc in new_splits:
             doc.metadata = doc.metadata or {}
             doc.metadata["source"] = source_value
@@ -1766,10 +1729,8 @@ class PageOracleBackend:
                 "question": question,
                 "history": history_messages,
                 "messages": [],
-                "mode": cast(Literal["auto", "analysis", "quote"], mode),
-                "force_answer_style": (
-                    "" if mode == "auto" else cast(Literal["analysis", "quote"], mode)
-                ),
+                "mode": mode,
+                "force_answer_style": ("" if mode == "auto" else mode),
                 "answer_style": "analysis",
                 "retrieval_query": question,
                 "rewrite_count": 0,
@@ -1786,14 +1747,10 @@ class PageOracleBackend:
                 answer = "Не удалось получить ответ. Попробуйте переформулировать вопрос."
 
             self.last_route_decision = (
-                result.get("route_decision", "auto-unknown")
-                if isinstance(result, dict)
-                else "auto-unknown"
+                result.get("route_decision", "auto-unknown") if isinstance(result, dict) else "auto-unknown"
             )
             self.last_retrieval_query = (
-                result.get("retrieval_query", question)
-                if isinstance(result, dict)
-                else question
+                result.get("retrieval_query", question) if isinstance(result, dict) else question
             )
             self.append_user_message(question)
             self.append_assistant_message(answer)
@@ -1801,6 +1758,7 @@ class PageOracleBackend:
         except Exception as err:
             self.log(f"[Graph] Ошибка: {err}")
             return "Внутренняя ошибка графа. Попробуйте повторить запрос."
+
 
 if __name__ == "__main__":
     PageOracleBackend().initialize()

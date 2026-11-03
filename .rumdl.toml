@@ -1,0 +1,13 @@
+[global]
+exclude = [
+    ".opencode/**",
+    ".agents/**",
+    "Book_Example/**",
+    ".ruff_cache/**",
+    ".rumdl_cache/**",
+]
+disable = [
+    "MD013",  # Line length
+    "MD033",  # Inline HTML (used for screenshots, layout in README.md)
+    "MD051",  # Link fragments (Cyrillic anchors in README.md)
+]

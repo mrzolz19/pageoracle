@@ -4,6 +4,7 @@ This document records architectural, technical, and process decisions for PageOr
 Before proposing plans or changes, consult the Table of Contents and relevant domain records.
 
 **Defined Domains:**
+
 - `architecture`: High-level system structure, services, entrypoints.
 - `rag-pipeline`: Retrieval, chunking, embeddings, reranking, LangGraph state machine.
 - `data`: Book ingestion, metadata schemas, persistence (settings, history).
@@ -16,24 +17,21 @@ Before proposing plans or changes, consult the Table of Contents and relevant do
 
 | ID | Date | Domain | Title | Status |
 |---|---|---|---|---|
-<!-- | D-001 | YYYY-MM-DD | architecture | Title here | Active | -->
+| D-001 | 2026-11-03 | workflow | Dev Quality Gates adoption with mise, ruff, ty, deptry, osv-scanner | Active |
 
 ---
 
 ## Decisions
 
-<!--
-Template for new entries:
+## D-001. Dev Quality Gates Adoption (2026-11-03)
 
-## D-<number>. <Short Title> (<date>)
-**Question:** What was discussed.
-**Options:** Proposed alternatives with pros and cons.
-**Chosen:** What the user chose.
-**Why:** Reason for choice in the user's words.
-**Why it should work:** Technical or rational justification.
-**Affects:** What parts of the system are impacted.
+**Question:** How to enforce automated quality gates and handle existing code violations and toolchain execution across platforms.
+**Options:** Baseline legacy violations vs direct fix/format (Option A); standard mise only vs mise with native uv fallback runner.
+**Chosen:** Option A: fix mechanical findings directly across web_gui and tkinter_gui with sync, standardize requirements.txt, use mise for CI and uv runner locally.
+**Why:** Resolves root-cause code smells without accumulating hidden baseline debt and ensures checks run smoothly on Windows without extra dependencies.
+**Why it should work:** Direct fixes eliminate lint and type errors permanently; dual-entrypoint synchronization is verified; uvx runs all tools directly.
+**Affects:** Toolchain configuration, pyproject.toml, requirements.txt, AGENTS.md, CI workflows, and both GUI modules.
 **Status:** Active
--->
 
 ---
 

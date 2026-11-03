@@ -1,16 +1,19 @@
-langchain 
-langchain-community 
-langchain-huggingface 
-langchain-core 
-langgraph 
-chardet 
-langchain-chroma 
-chromadb 
-langchain-deepseek 
-langchain-gigachat 
-langchain-openrouter 
-yandexcloud 
-sentence-transformers 
-rank_bm25 
-torch 
-torchvision --index-url https://download.pytorch.org/whl/cu130
+langchain
+langchain-community
+langchain-huggingface
+langchain-core
+langchain-text-splitters
+pydantic
+langgraph
+chardet
+langchain-chroma
+chromadb
+langchain-deepseek
+langchain-gigachat
+langchain-openrouter
+yandexcloud
+sentence-transformers
+rank_bm25
+torch
+--extra-index-url https://download.pytorch.org/whl/cu130
+torchvision

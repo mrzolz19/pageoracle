@@ -8,16 +8,16 @@ Flask-слой над существующим PageOracleBackend из main.py:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
 from flask import Flask, jsonify, render_template, request
-
 from main import PROVIDERS, PageOracleBackend
 
 BASE_DIR = Path(__file__).parent
@@ -36,7 +36,7 @@ EMBEDDING_OPTIONS = [
 
 
 def now_ts() -> str:
-    return datetime.now().strftime("%H:%M:%S")
+    return datetime.now(timezone.utc).astimezone().strftime("%H:%M:%S")
 
 
 def load_settings() -> dict[str, Any]:
@@ -159,7 +159,7 @@ class WebAppState:
                 "mode": self.mode,
                 "chat": list(self.chat_messages),
                 "logs": list(self.logs),
-                "books": list((self.backend.loaded_books if self.backend else [])),
+                "books": list(self.backend.loaded_books if self.backend else []),
                 "providers": PROVIDERS,
                 "embedding_options": EMBEDDING_OPTIONS,
             }
@@ -223,7 +223,7 @@ def _validate_settings(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Неизвестный провайдер.")
 
     models = PROVIDERS[provider].get("models", [])
-    if model not in models:
+    if not isinstance(models, list) or model not in models:
         raise ValueError("Выберите корректную модель для провайдера.")
 
     if embedding_model not in EMBEDDING_OPTIONS:
@@ -347,10 +347,8 @@ def api_upload():
             return jsonify({"ok": False, "error": str(err)}), 500
         finally:
             if temp_path and temp_path.exists():
-                try:
+                with contextlib.suppress(Exception):
                     temp_path.unlink()
-                except Exception:
-                    pass
             state.set_busy(False)
 
 
@@ -440,9 +438,7 @@ def api_settings():
                 )
 
             if ok:
-                ok = state.backend.set_score_threshold(
-                    float(validated.get("score_threshold", 0.6))
-                )
+                ok = state.backend.set_score_threshold(float(validated.get("score_threshold", 0.6)))
 
             if not ok:
                 return jsonify({"ok": False, "error": "Не удалось применить настройки."}), 500

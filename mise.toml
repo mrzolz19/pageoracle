@@ -1,0 +1,22 @@
+# Dev Quality Gates toolchain specification for PageOracle
+# Run `mise run check` to execute all quality gates, or `mise run fix` to apply safe fixes.
+
+[tools]
+python = "3.11"
+uv = "0.7.20"
+ruff = "0.17.3"
+ty = "0.0.96"
+deptry = "0.25.1"
+typos = "1.52.0"
+rumdl = "0.3.2"
+agnix = "0.60.3"
+jactionlint = "2.4.0"
+"ubi:google/osv-scanner" = "2.7.0"
+
+[tasks.check]
+description = "Run all quality gate checks (CI and local aggregate)"
+run = "python scripts/check.py"
+
+[tasks.fix]
+description = "Apply safe automatic fixes"
+run = "python scripts/fix.py"

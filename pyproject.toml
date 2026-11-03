@@ -1,0 +1,95 @@
+[project]
+name = "pageoracle"
+version = "0.1.0"
+description = "RAG application for questioning and analyzing books"
+requires-python = ">=3.10"
+dependencies = [
+    "flask",
+    "langchain",
+    "langchain-community",
+    "langchain-huggingface",
+    "langchain-core",
+    "langchain-text-splitters",
+    "pydantic",
+    "langgraph",
+    "chardet",
+    "langchain-chroma",
+    "chromadb",
+    "langchain-deepseek",
+    "langchain-gigachat",
+    "langchain-openrouter",
+    "yandexcloud",
+    "sentence-transformers",
+    "rank_bm25",
+    "torch",
+    "torchvision",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+exclude = [
+    ".git",
+    ".venv",
+    "venv",
+    "Book_Example",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "B",
+    "I",
+    "UP",
+    "SIM",
+    "ISC",
+    "DTZ",
+    "S",
+    "TRY",
+    "BLE",
+]
+ignore = [
+    "S104",    # Possible binding to all interfaces (Flask local dev server)
+    "S110",    # try-except-pass detected, consider logging
+    "BLE001",  # Catching broad Exception (used across PageOracle for robust GUI error trapping)
+    "TRY003",  # Avoid specifying long messages outside the exception class
+    "TRY300",  # Consider moving this statement to an else block
+    "TRY301",  # Abstract raise to an inner function
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "S101",   # Use of assert in tests
+    "BLE001", # Blind exception catching in tests
+]
+"scripts/*" = [
+    "S603",   # Subprocess call with known command list
+    "S607",   # Starting process with partial executable path
+]
+
+[tool.deptry]
+known_first_party = ["main"]
+extend_exclude = [
+    "Book_Example",
+    "tests",
+]
+
+[tool.deptry.package_module_name_map]
+sentence-transformers = "sentence_transformers"
+rank_bm25 = "rank_bm25"
+langchain-text-splitters = "langchain_text_splitters"
+
+[tool.deptry.per_rule_ignores]
+DEP002 = [
+    "chardet",
+    "chromadb",
+    "langchain-chroma",
+    "langchain-deepseek",
+    "langchain-gigachat",
+    "langchain-openrouter",
+    "rank_bm25",
+    "torch",
+    "torchvision",
+    "yandexcloud",
+]
