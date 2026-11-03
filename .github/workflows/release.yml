@@ -125,6 +125,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.vars.outputs.tag }}
           IS_DRAFT: ${{ github.event.inputs.draft }}
         run: |
@@ -133,6 +134,7 @@ jobs:
             DRAFT_FLAG="--draft"
           fi
           gh release create "$TAG" release-assets/*.zip \
+            --repo "$GH_REPO" \
             --title "PageOracle $TAG" \
             --generate-notes \
             $DRAFT_FLAG
