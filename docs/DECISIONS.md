@@ -20,6 +20,7 @@ Before proposing plans or changes, consult the Table of Contents and relevant do
 | D-001 | 2026-11-03 | workflow | Dev Quality Gates adoption with mise, ruff, ty, deptry, osv-scanner | Active |
 | D-002 | 2026-11-03 | workflow | Configure ty allowed-unresolved-imports for project dependencies | Active |
 | D-003 | 2026-11-03 | rag-pipeline | Fix PyTorch CUDA 12.8 wheel ABI and pin reproducible dependencies | Active |
+| D-004 | 2026-11-03 | data | Exclude dependency manifests and fallback to adjacent books directory | Active |
 
 ---
 
@@ -53,6 +54,16 @@ Before proposing plans or changes, consult the Table of Contents and relevant do
 **Why:** User requested GPU support for fast CrossEncoder reranking and strict dependency pinning for reproducible deployment.
 **Why it should work:** Eliminates C++ extension ABI mismatch between PyTorch and torchvision/torchaudio, restores hardware GPU acceleration, and pins tested dependency matrix.
 **Affects:** `web_gui_pageoracle/requirements.txt`, `tkinter_gui/requirements.txt`, `web_gui_pageoracle/main.py`, `tkinter_gui/main.py`.
+**Status:** Active
+
+## D-004. Exclude Dependency Manifests and Adjacent Books Fallback (2026-11-03)
+
+**Question:** How to prevent initial startup from indexing `requirements.txt` into Chroma and discover sample books reliably across entrypoints.
+**Options:** Inline filtering in both `main.py` vs centralized `EXCLUDED_BOOK_FILES` constant and fallback to adjacent `books/` directory; leave `Book_Example/` vs migrate git tracking to entrypoint `books/`.
+**Chosen:** Centralized `EXCLUDED_BOOK_FILES = {"requirements.txt"}` with fallback to `books/` folder in `_load_all_books()`, update `self.books_dir`, track `books/` in git, and exclude `**/books/**` in toolchain linters.
+**Why:** User requested fixing false positive indexing on `requirements.txt` and ensuring books in `books/` are recognized and indexed on first launch.
+**Why it should work:** Eliminates false indexing of dependency manifests, resolves proper book directories automatically, fixes multilingual typo gate failures, and preserves bit-for-bit sync across both GUIs.
+**Affects:** `web_gui_pageoracle/main.py`, `tkinter_gui/main.py`, `typos.toml`, `.rumdl.toml`, `pyproject.toml`, `.gitignore`, `README.md`.
 **Status:** Active
 
 ---

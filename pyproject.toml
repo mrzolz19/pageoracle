@@ -32,7 +32,7 @@ exclude = [
     ".git",
     ".venv",
     "venv",
-    "Book_Example",
+    "books",
 ]
 
 [tool.ruff.lint]
@@ -71,7 +71,7 @@ ignore = [
 [tool.deptry]
 known_first_party = ["main"]
 extend_exclude = [
-    "Book_Example",
+    "books",
     "tests",
 ]
 

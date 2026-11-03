@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal, TypedDict, cast
 
+import chardet
 from langchain.tools import tool
 from langchain_community.document_loaders import TextLoader
 from langchain_community.retrievers import BM25Retriever
@@ -46,6 +47,7 @@ from sentence_transformers import CrossEncoder
 RETRIEVER_K = 20
 RETRIEVER_FETCH_K = 50
 RERANK_TOP_K = 7
+EXCLUDED_BOOK_FILES: set[str] = {"requirements.txt"}
 
 EMBEDDING_MODELS = {
     "nvidia/llama-nemotron-embed-vl-1b-v2:free": {
@@ -626,6 +628,8 @@ class HybridRerankerRetriever(BaseRetriever):
 class PageOracleBackend:
     """Основной оркестратор: загрузка книг, индекс, модель, граф и история."""
 
+    EXCLUDED_BOOK_FILES = EXCLUDED_BOOK_FILES
+
     def __init__(self, books_dir=".", persist_dir="./chroma_intro_db", log_callback=None):
         self.books_dir = books_dir
         self.persist_dir = persist_dir
@@ -876,7 +880,23 @@ class PageOracleBackend:
         self.log("[Инициализация] Система готова к работе!")
 
     def _load_all_books(self):
-        txt_files = sorted(Path(self.books_dir).glob("*.txt"))
+        target_path = Path(self.books_dir)
+        txt_files = [
+            f for f in sorted(target_path.glob("*.txt")) if f.is_file() and f.name.lower() not in EXCLUDED_BOOK_FILES
+        ]
+
+        if not txt_files:
+            fallback_dir = Path(__file__).resolve().parent / "books"
+            if fallback_dir.is_dir() and fallback_dir.resolve() != target_path.resolve():
+                fallback_files = [
+                    f
+                    for f in sorted(fallback_dir.glob("*.txt"))
+                    if f.is_file() and f.name.lower() not in EXCLUDED_BOOK_FILES
+                ]
+                if fallback_files:
+                    self.books_dir = str(fallback_dir)
+                    txt_files = fallback_files
+
         if not txt_files:
             self.log(f"[!] Нет .txt файлов в «{self.books_dir}»")
             return
@@ -959,7 +979,16 @@ class PageOracleBackend:
     def _load_and_annotate(self, filepath: str) -> list:
         path = Path(filepath)
         book_title = path.stem.replace("_", " ").replace("-", " ")
-        raw_docs = TextLoader(str(path), autodetect_encoding=True).load()
+        try:
+            raw_docs = TextLoader(str(path), encoding="utf-8").load()
+        except (RuntimeError, UnicodeDecodeError):
+            try:
+                raw_docs = TextLoader(str(path), encoding="cp1251").load()
+            except (RuntimeError, UnicodeDecodeError):
+                raw = path.read_bytes()
+                det = chardet.detect(raw[:50000])
+                enc = det.get("encoding") or "utf-8"
+                raw_docs = TextLoader(str(path), encoding=enc).load()
         annotated = annotate_book(raw_docs, book_title)
         normalized_source = self._normalize_source_path(path)
         for doc in annotated:

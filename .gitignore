@@ -12,4 +12,6 @@ venv/
 chroma_intro_db/
 
 # Local sample books duplicates
-tkinter_gui/Book_Example/
+**/books/**
+!web_gui_pageoracle/books/**
+!tkinter_gui/books/**

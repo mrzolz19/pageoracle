@@ -2,7 +2,7 @@
 exclude = [
     ".opencode/**",
     ".agents/**",
-    "Book_Example/**",
+    "**/books/**",
     ".ruff_cache/**",
     ".rumdl_cache/**",
 ]
