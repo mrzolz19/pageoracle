@@ -1,5 +1,6 @@
 [files]
 extend-exclude = [
+    "**/Book_Example/**",
     "Book_Example/**",
     ".git/**",
     "*.lock",

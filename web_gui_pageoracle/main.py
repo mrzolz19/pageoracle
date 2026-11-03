@@ -965,7 +965,7 @@ class PageOracleBackend:
         for doc in annotated:
             doc.metadata = doc.metadata or {}
             doc.metadata["source"] = normalized_source
-        self.log(f"  «{path.name}» → {len(annotated)} сегментов (part/chapter)")
+        self.log(f"  «{path.name}» -> {len(annotated)} сегментов (part/chapter)")
         return annotated
 
     # ── векторное хранилище ──────────────────────────────────────────

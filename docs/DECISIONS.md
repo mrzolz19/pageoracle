@@ -19,6 +19,7 @@ Before proposing plans or changes, consult the Table of Contents and relevant do
 |---|---|---|---|---|
 | D-001 | 2026-11-03 | workflow | Dev Quality Gates adoption with mise, ruff, ty, deptry, osv-scanner | Active |
 | D-002 | 2026-11-03 | workflow | Configure ty allowed-unresolved-imports for project dependencies | Active |
+| D-003 | 2026-11-03 | rag-pipeline | Fix PyTorch CUDA 12.8 wheel ABI and pin reproducible dependencies | Active |
 
 ---
 
@@ -42,6 +43,16 @@ Before proposing plans or changes, consult the Table of Contents and relevant do
 **Why:** Avoids downloading massive ML runtime packages during fast static checks while keeping `unresolved-import` enforced for undeclared or misspelled modules.
 **Why it should work:** `deptry` already strictly validates all imports against `dependencies`, while `ty` validates first-party code and standard library types.
 **Affects:** `pyproject.toml`, CI quality gates.
+**Status:** Active
+
+## D-003. PyTorch CUDA 12.8 Wheel ABI and Pinned Dependencies (2026-11-03)
+
+**Question:** How to fix `RuntimeError: operator torchvision::nms does not exist` and ensure reproducible environments across GUI versions.
+**Options:** Purge torchvision/torchaudio (CPU-only without GPU acceleration); upgrade PyTorch to CUDA 12.8 wheel matching torchvision and pin dependencies.
+**Chosen:** User selected Option 1: Install `torch==2.11.0+cu128` to match installed CUDA 12.8 wheels and pin explicit version specifications in requirements.
+**Why:** User requested GPU support for fast CrossEncoder reranking and strict dependency pinning for reproducible deployment.
+**Why it should work:** Eliminates C++ extension ABI mismatch between PyTorch and torchvision/torchaudio, restores hardware GPU acceleration, and pins tested dependency matrix.
+**Affects:** `web_gui_pageoracle/requirements.txt`, `tkinter_gui/requirements.txt`, `web_gui_pageoracle/main.py`, `tkinter_gui/main.py`.
 **Status:** Active
 
 ---

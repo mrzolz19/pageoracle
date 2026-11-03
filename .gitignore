@@ -10,3 +10,6 @@ venv/
 
 # Vector store database
 chroma_intro_db/
+
+# Local sample books duplicates
+tkinter_gui/Book_Example/
