@@ -76,37 +76,62 @@
 
   <div id="settingsOverlay" class="settings-overlay hidden">
     <div class="settings-card">
-      <h2>⚙ Настройки</h2>
+      <div class="settings-header">
+        <h2>⚙ Настройки</h2>
+        <button id="btnManageCustomProviders" type="button" class="btn-subaction">⚙ Кастомные провайдеры</button>
+      </div>
       <form id="settingsForm" novalidate>
         <div class="form-group">
           <label for="providerSelect">Провайдер ИИ</label>
           <select id="providerSelect" class="form-select"></select>
         </div>
 
-        <div class="form-group">
-          <label for="modelSelect">LLM модель</label>
-          <select id="modelSelect" class="form-select"></select>
+        <div id="llmEndpointGroup" class="form-group hidden">
+          <label for="llmEndpointInput">LLM Endpoint URL</label>
+          <input id="llmEndpointInput" class="form-input" type="text" placeholder="http://localhost:11434/v1" autocomplete="off">
         </div>
 
         <div class="form-group">
-          <label for="embeddingSelect">Embedding-модель</label>
-          <select id="embeddingSelect" class="form-select"></select>
+          <label for="modelInput">LLM модель</label>
+          <input id="modelInput" list="modelDatalist" class="form-input" type="text" autocomplete="off" placeholder="Выберите или введите название модели...">
+          <datalist id="modelDatalist"></datalist>
         </div>
 
-        <div class="form-group">
+        <div id="llmApiGroup" class="form-group">
           <label for="llmApiInput">API ключ от LLM</label>
           <input id="llmApiInput" class="form-input" type="password" autocomplete="off">
         </div>
 
+        <div id="ycFolderGroup" class="form-group">
+          <label for="ycFolderInput">YC_FOLDER_ID (для YandexGPT)</label>
+          <input id="ycFolderInput" class="form-input" type="text" autocomplete="off">
+        </div>
+
+        <div class="form-divider"></div>
+        <div class="section-label">Настройки эмбеддингов</div>
+
         <div class="form-group">
+          <label for="embeddingInput">Embedding-модель</label>
+          <input id="embeddingInput" list="embeddingDatalist" class="form-input" type="text" autocomplete="off" placeholder="Выберите или введите embedding-модель...">
+          <datalist id="embeddingDatalist"></datalist>
+        </div>
+
+        <label class="checkbox-row" for="embeddingSameAsLlmCheckbox">
+          <input id="embeddingSameAsLlmCheckbox" type="checkbox">
+          Использовать тот же провайдер и endpoint для эмбеддингов
+        </label>
+
+        <div id="embeddingEndpointGroup" class="form-group">
+          <label for="embeddingEndpointInput">Embedding Endpoint URL</label>
+          <input id="embeddingEndpointInput" class="form-input" type="text" placeholder="http://localhost:11434/v1 (опционально)" autocomplete="off">
+        </div>
+
+        <div id="embeddingApiGroup" class="form-group">
           <label for="embeddingApiInput">API ключ embedding-модели</label>
           <input id="embeddingApiInput" class="form-input" type="password" autocomplete="off">
         </div>
 
-        <div class="form-group">
-          <label for="ycFolderInput">YC_FOLDER_ID (для YandexGPT)</label>
-          <input id="ycFolderInput" class="form-input" type="text" autocomplete="off">
-        </div>
+        <div class="form-divider"></div>
 
         <label class="checkbox-row" for="showKeysCheckbox">
           <input id="showKeysCheckbox" type="checkbox">
@@ -140,6 +165,59 @@
           <button type="submit" class="btn-save">💾 Сохранить</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <div id="customProvidersOverlay" class="settings-overlay hidden">
+    <div class="settings-card custom-providers-card">
+      <div class="settings-header">
+        <h2>⚙ Кастомные провайдеры</h2>
+        <button id="btnCloseCustomProviders" type="button" class="btn-subaction">Закрыть</button>
+      </div>
+
+      <div class="custom-providers-body">
+        <div class="custom-providers-list-section">
+          <div class="section-label">Сохраненные провайдеры</div>
+          <div id="customProvidersList" class="custom-providers-list"></div>
+        </div>
+
+        <div class="custom-provider-form-section">
+          <div id="customFormHeading" class="section-label">Добавить провайдер</div>
+          <form id="customProviderForm" novalidate>
+            <input id="customEditIndex" type="hidden" value="-1">
+
+            <div class="form-group">
+              <label for="customNameInput">Название провайдера</label>
+              <input id="customNameInput" class="form-input" type="text" placeholder="например, Ollama Local" required autocomplete="off">
+            </div>
+
+            <div class="form-group">
+              <label for="customEndpointInput">Endpoint URL</label>
+              <input id="customEndpointInput" class="form-input" type="text" placeholder="http://localhost:11434/v1" required autocomplete="off">
+            </div>
+
+            <div class="form-group">
+              <label for="customApiKeyInput">API ключ (опционально)</label>
+              <input id="customApiKeyInput" class="form-input" type="password" placeholder="Оставьте пустым, если не требуется" autocomplete="off">
+            </div>
+
+            <div class="form-group">
+              <label for="customModelInput">Модель LLM по умолчанию</label>
+              <input id="customModelInput" class="form-input" type="text" placeholder="например, llama3.2" autocomplete="off">
+            </div>
+
+            <div class="form-group">
+              <label for="customEmbeddingModelInput">Embedding-модель по умолчанию</label>
+              <input id="customEmbeddingModelInput" class="form-input" type="text" placeholder="например, nomic-embed-text" autocomplete="off">
+            </div>
+
+            <div class="custom-form-btns">
+              <button id="btnCancelCustomForm" type="button" class="btn-cancel">Сбросить</button>
+              <button id="btnSaveCustomProvider" type="submit" class="btn-save">💾 Сохранить профиль</button>
+            </div>
+          </form>
+        </div>
+      </div>
     </div>
   </div>
 

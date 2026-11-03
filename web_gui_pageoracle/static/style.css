@@ -605,6 +605,136 @@ body {
   margin-top: 10px;
 }
 
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.settings-header h2 {
+  margin-bottom: 0;
+}
+
+.btn-subaction {
+  background: var(--surface);
+  color: var(--secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-subaction:hover {
+  background: var(--border);
+  color: #fff;
+}
+
+.form-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 16px 0;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.custom-providers-card {
+  width: min(720px, 100%);
+}
+
+.custom-providers-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.custom-providers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+  margin-top: 6px;
+}
+
+.custom-provider-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  gap: 12px;
+}
+
+.custom-provider-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.custom-provider-name {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.custom-provider-endpoint {
+  font-size: 12px;
+  color: var(--secondary);
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-provider-models {
+  font-size: 11px;
+  color: var(--text-sec);
+}
+
+.custom-provider-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.btn-icon-action {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-sec);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-icon-action:hover {
+  background: var(--input-bg);
+  color: var(--text);
+}
+
+.btn-icon-action.delete:hover {
+  background: rgba(255, 107, 107, 0.15);
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.custom-form-btns {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
 .btn-cancel,
 .btn-save {
   border: none;

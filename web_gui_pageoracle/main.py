@@ -553,6 +553,105 @@ class OpenRouterEmbeddings(Embeddings):
         return vectors[0] if vectors else []
 
 
+class OpenAICompatibleEmbeddings(Embeddings):
+    """Клиент для OpenAI-совместимых embeddings эндпоинтов (Ollama, vLLM, LM Studio и др.)."""
+
+    def __init__(self, model_name: str, endpoint: str, api_key: str = ""):
+        self.model_name = model_name
+        self.api_key = api_key.strip()
+        ep = endpoint.strip() or "http://localhost:11434/v1"
+        ep_clean = ep.rstrip("/")
+        if ep_clean.endswith("/embeddings"):
+            self.endpoint = ep_clean
+        else:
+            self.endpoint = f"{ep_clean}/embeddings"
+        self.batch_size = 32
+
+    def _parse_response_json(self, raw_bytes: bytes) -> dict[str, Any]:
+        text = raw_bytes.decode("utf-8", errors="replace").strip()
+        if not text:
+            raise RuntimeError("Embeddings эндпоинт вернул пустой ответ.")
+
+        try:
+            payload = json.loads(text)
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            pass
+
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and start < end:
+            maybe_json = text[start : end + 1]
+            try:
+                payload = json.loads(maybe_json)
+                if isinstance(payload, dict):
+                    return payload
+            except json.JSONDecodeError:
+                pass
+
+        snippet = text[:500].replace("\n", " ")
+        raise RuntimeError(f"Embeddings эндпоинт вернул ответ в неожиданном формате (не JSON). Фрагмент: {snippet}")
+
+    def _request_embeddings(self, inputs: list[str]) -> list[list[float]]:
+        payload = {
+            "model": self.model_name,
+            "input": inputs,
+        }
+        body = json.dumps(payload).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+        }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        request = urllib.request.Request(  # noqa: S310
+            self.endpoint,
+            data=body,
+            headers=headers,
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
+                result = self._parse_response_json(response.read())
+        except urllib.error.HTTPError as err:
+            details = err.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"Ошибка OpenAI-compatible embeddings: HTTP {err.code}. {details}") from err
+        except urllib.error.URLError as err:
+            raise RuntimeError(f"Сеть недоступна для OpenAI-compatible embeddings ({self.endpoint}): {err}") from err
+
+        data = result.get("data", [])
+        vectors: list[list[float]] = []
+        for item in data:
+            if isinstance(item, dict):
+                emb = item.get("embedding")
+                if isinstance(emb, list):
+                    vectors.append([float(v) for v in emb])
+
+        if len(vectors) != len(inputs):
+            raise RuntimeError(
+                f"Embeddings эндпоинт вернул некорректное число векторов: "
+                f"получено {len(vectors)}, ожидалось {len(inputs)}"
+            )
+        return vectors
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), self.batch_size):
+            batch = texts[start : start + self.batch_size]
+            vectors.extend(self._request_embeddings(batch))
+        return vectors
+
+    def embed_query(self, text: str) -> list[float]:
+        vectors = self._request_embeddings([text])
+        if not vectors:
+            raise RuntimeError("Embeddings эндпоинт не вернул вектор для запроса.")
+        return vectors[0]
+
+
 class SimpleReranker:
     """Переупорядочивает найденные документы по CrossEncoder-скорингу."""
 
@@ -664,6 +763,9 @@ class PageOracleBackend:
         self.model_supports_tools = True
         self.model_supports_structured_output = True
         self.embedding_model_name = DEFAULT_EMBEDDING_MODEL
+        self.embedding_endpoint = ""
+        self.llm_endpoint = ""
+        self.custom_providers: list[dict[str, Any]] = []
         self.provider_name = ""
 
     def _build_fallback_retrieve_response(self, query: str) -> AIMessage:
@@ -766,18 +868,34 @@ class PageOracleBackend:
         gc.collect()
         shutil.rmtree(self.persist_dir, ignore_errors=True)
 
-    def _create_embeddings(self, embedding_model: str, api_key: str) -> Embeddings:
+    def _create_embeddings(
+        self,
+        embedding_model: str,
+        api_key: str,
+        endpoint: str = "",
+    ) -> Embeddings:
         # Важный нюанс: один и тот же UI-параметр embedding_model
         # маппится на разные backend-клиенты в зависимости от provider.
         model_name = embedding_model.strip() or DEFAULT_EMBEDDING_MODEL
         cfg = EMBEDDING_MODELS.get(model_name)
-        if not cfg:
-            raise ValueError(f"Неизвестная embedding модель: {model_name}")
+        resolved_api_key = api_key.strip()
+        effective_endpoint = endpoint.strip() or self.embedding_endpoint.strip()
+
+        # Если указан endpoint или модель отсутствует в предустановленных EMBEDDING_MODELS,
+        # используем универсальный OpenAICompatibleEmbeddings клиент.
+        if effective_endpoint or not cfg:
+            self.embedding_model_name = model_name
+            self.embedding_endpoint = effective_endpoint
+            return OpenAICompatibleEmbeddings(
+                model_name=model_name,
+                endpoint=effective_endpoint or "http://localhost:11434/v1",
+                api_key=resolved_api_key,
+            )
 
         provider = str(cfg.get("provider", ""))
         query_prefix = str(cfg.get("query_prefix", ""))
         doc_prefix = str(cfg.get("doc_prefix", ""))
-        resolved_api_key = api_key.strip() or os.getenv("OPENROUTER_API_KEY", "").strip()
+        resolved_api_key = resolved_api_key or os.getenv("OPENROUTER_API_KEY", "").strip()
 
         if provider == "openrouter":
             if resolved_api_key:
@@ -855,12 +973,24 @@ class PageOracleBackend:
         max_tokens: int = 4096,
         top_p: float = 0.9,
         score_threshold: float = 0.6,
+        endpoint: str = "",
+        embedding_endpoint: str = "",
+        custom_providers: list[dict[str, Any]] | None = None,
     ):
         resolved_llm_api_key = llm_api_key.strip() or api_key.strip()
         resolved_embedding_api_key = embedding_api_key.strip() or api_key.strip()
         self.score_threshold = score_threshold
+        if endpoint.strip():
+            self.llm_endpoint = endpoint.strip()
+        if embedding_endpoint.strip():
+            self.embedding_endpoint = embedding_endpoint.strip()
+        if custom_providers is not None:
+            self.custom_providers = list(custom_providers)
+
         self.log("[Инициализация] Загружаем эмбеддинги…")
-        self.embeddings = self._create_embeddings(embedding_model, resolved_embedding_api_key)
+        self.embeddings = self._create_embeddings(
+            embedding_model, resolved_embedding_api_key, endpoint=self.embedding_endpoint
+        )
 
         self.log("[Инициализация] Загружаем книги…")
         self._load_all_books()
@@ -876,6 +1006,8 @@ class PageOracleBackend:
             temperature=temperature,
             max_tokens=max_tokens,
             top_p=top_p,
+            endpoint=self.llm_endpoint,
+            custom_providers=self.custom_providers,
         )
 
         self.log("[Инициализация] Система готова к работе!")
@@ -1119,10 +1251,12 @@ class PageOracleBackend:
             shutil.rmtree(self.persist_dir, ignore_errors=True)
             raise
 
-    def set_embeddings(self, embedding_model: str, api_key: str) -> bool:
+    def set_embeddings(self, embedding_model: str, api_key: str, endpoint: str = "") -> bool:
         try:
             self.log(f"[Эмбеддинги] Переключаем embedding модель: {embedding_model}")
-            self.embeddings = self._create_embeddings(embedding_model, api_key)
+            if endpoint.strip():
+                self.embedding_endpoint = endpoint.strip()
+            self.embeddings = self._create_embeddings(embedding_model, api_key, endpoint=endpoint)
 
             try:
                 self._init_vectorstore()
@@ -1155,12 +1289,31 @@ class PageOracleBackend:
         temperature: float = 0.2,
         max_tokens: int = 4096,
         top_p: float = 0.9,
+        endpoint: str = "",
+        custom_providers: list[dict[str, Any]] | None = None,
     ) -> bool:
+        if custom_providers is not None:
+            self.custom_providers = list(custom_providers)
+        if endpoint.strip():
+            self.llm_endpoint = endpoint.strip()
+
+        matching_custom = next((p for p in self.custom_providers if p.get("name") == provider_name), None)
+        effective_endpoint = endpoint.strip() or self.llm_endpoint.strip()
+        if matching_custom:
+            if not effective_endpoint and matching_custom.get("endpoint"):
+                effective_endpoint = str(matching_custom["endpoint"]).strip()
+            if not api_key.strip() and matching_custom.get("api_key"):
+                api_key = str(matching_custom["api_key"]).strip()
+            if not model_name.strip() and matching_custom.get("model"):
+                model_name = str(matching_custom["model"]).strip()
+
+        is_custom = (provider_name not in PROVIDERS) or (provider_name == "Custom") or bool(matching_custom)
         cfg = PROVIDERS.get(provider_name)
-        if not cfg:
+        if not is_custom and not cfg:
             self.log(f"[Ошибка] Неизвестный провайдер: {provider_name}")
             return False
-        env_key = str(cfg.get("env_key", "")).strip()
+
+        env_key = str(cfg.get("env_key", "")).strip() if cfg else ""
         if env_key and api_key.strip():
             os.environ[env_key] = api_key
         try:
@@ -1171,80 +1324,103 @@ class PageOracleBackend:
             self.model_supports_tools = True
             self.model_supports_structured_output = True
 
-            package_name = str(cfg["package"])
-            class_name = str(cfg["class"])
-            module = importlib.import_module(package_name)
-            model_class = getattr(module, class_name)
-
-            provider_kwargs: dict[str, Any] = {}
-            if provider_name == "GigaChat":
-                provider_kwargs["verify_ssl_certs"] = bool(cfg.get("verify_ssl_certs", False))
-
-            if provider_name == "YandexGPT":
-                folder_id = os.getenv("YC_FOLDER_ID", "").strip()
-                common_kwargs = {
-                    "model_uri": self._build_yandex_model_uri(model_name, folder_id),
-                    "temperature": temperature,
-                    **provider_kwargs,
-                }
-                if folder_id:
-                    common_kwargs["folder_id"] = folder_id
-                if api_key.strip():
-                    common_kwargs["api_key"] = api_key.strip()
-            else:
-                common_kwargs = {
+            if is_custom:
+                module = importlib.import_module("langchain_openai")
+                model_class = module.ChatOpenAI
+                common_kwargs: dict[str, Any] = {
                     "model": model_name,
+                    "openai_api_base": effective_endpoint or "http://localhost:11434/v1",
+                    "api_key": api_key.strip() or "not-needed",
                     "temperature": temperature,
                     "max_tokens": max_tokens,
                     "top_p": top_p,
-                    **provider_kwargs,
                 }
+                try:
+                    self.model = model_class(**common_kwargs)
+                except TypeError:
+                    self.model = model_class(
+                        model=model_name,
+                        openai_api_base=effective_endpoint or "http://localhost:11434/v1",
+                        api_key=api_key.strip() or "not-needed",
+                        temperature=temperature,
+                    )
+            else:
+                if cfg is None:
+                    return False
+                package_name = str(cfg["package"])
+                class_name = str(cfg["class"])
+                module = importlib.import_module(package_name)
+                model_class = getattr(module, class_name)
 
-            # По документации LangChain для OpenRouter используем выделенный
-            # провайдер ChatOpenRouter (langchain_openrouter)
-            if provider_name == "OpenRouter" and api_key.strip():
-                common_kwargs["api_key"] = api_key.strip()
+                provider_kwargs: dict[str, Any] = {}
+                if provider_name == "GigaChat":
+                    provider_kwargs["verify_ssl_certs"] = bool(cfg.get("verify_ssl_certs", False))
 
-            # Некоторые провайдеры используют max_output_tokens вместо max_tokens.
-            if provider_name == "Google":
-                common_kwargs["max_output_tokens"] = max_tokens
-
-            try:
-                self.model = model_class(**common_kwargs)
-            except TypeError:
                 if provider_name == "YandexGPT":
                     folder_id = os.getenv("YC_FOLDER_ID", "").strip()
-                    minimal_kwargs: dict[str, Any] = {
+                    common_kwargs = {
                         "model_uri": self._build_yandex_model_uri(model_name, folder_id),
+                        "temperature": temperature,
                         **provider_kwargs,
                     }
                     if folder_id:
-                        minimal_kwargs["folder_id"] = folder_id
+                        common_kwargs["folder_id"] = folder_id
                     if api_key.strip():
-                        minimal_kwargs["api_key"] = api_key.strip()
-                    self.model = model_class(**minimal_kwargs)
+                        common_kwargs["api_key"] = api_key.strip()
                 else:
-                    # Fallback для моделей с неполной поддержкой kwargs.
-                    try:
-                        self.model = model_class(
-                            model=model_name,
-                            temperature=temperature,
-                            top_p=top_p,
-                            **provider_kwargs,
-                        )
-                    except TypeError:
-                        self.model = model_class(
-                            model=model_name,
-                            temperature=temperature,
-                            **provider_kwargs,
-                        )
+                    common_kwargs = {
+                        "model": model_name,
+                        "temperature": temperature,
+                        "max_tokens": max_tokens,
+                        "top_p": top_p,
+                        **provider_kwargs,
+                    }
 
-            if provider_name == "YandexGPT":
-                # ChatYandexGPT в langchain_community не реализует bind_tools / with_structured_output.
-                # Явно включаем совместимый fallback-режим, чтобы не пытаться вызывать
-                # неподдерживаемые API и не зашумлять логи ошибками.
-                self.model_supports_tools = False
-                self.model_supports_structured_output = False
+                # По документации LangChain для OpenRouter используем выделенный
+                # провайдер ChatOpenRouter (langchain_openrouter)
+                if provider_name == "OpenRouter" and api_key.strip():
+                    common_kwargs["api_key"] = api_key.strip()
+
+                # Некоторые провайдеры используют max_output_tokens вместо max_tokens.
+                if provider_name == "Google":
+                    common_kwargs["max_output_tokens"] = max_tokens
+
+                try:
+                    self.model = model_class(**common_kwargs)
+                except TypeError:
+                    if provider_name == "YandexGPT":
+                        folder_id = os.getenv("YC_FOLDER_ID", "").strip()
+                        minimal_kwargs: dict[str, Any] = {
+                            "model_uri": self._build_yandex_model_uri(model_name, folder_id),
+                            **provider_kwargs,
+                        }
+                        if folder_id:
+                            minimal_kwargs["folder_id"] = folder_id
+                        if api_key.strip():
+                            minimal_kwargs["api_key"] = api_key.strip()
+                        self.model = model_class(**minimal_kwargs)
+                    else:
+                        # Fallback для моделей с неполной поддержкой kwargs.
+                        try:
+                            self.model = model_class(
+                                model=model_name,
+                                temperature=temperature,
+                                top_p=top_p,
+                                **provider_kwargs,
+                            )
+                        except TypeError:
+                            self.model = model_class(
+                                model=model_name,
+                                temperature=temperature,
+                                **provider_kwargs,
+                            )
+
+                if provider_name == "YandexGPT":
+                    # ChatYandexGPT в langchain_community не реализует bind_tools / with_structured_output.
+                    # Явно включаем совместимый fallback-режим, чтобы не пытаться вызывать
+                    # неподдерживаемые API и не зашумлять логи ошибками.
+                    self.model_supports_tools = False
+                    self.model_supports_structured_output = False
 
             self._create_chains()
             self._create_graph()
@@ -1552,7 +1728,7 @@ class PageOracleBackend:
                 self.log(f"[Grade] with_structured_output недоступен, fallback ручного парсинга: {e}")
                 self.model_supports_structured_output = False
 
-        if not decision:
+        if not isinstance(decision, GradeDecision):
             reply = model.invoke([HumanMessage(content=GRADE_PROMPT.format(question=question, context=context))])
             content = _extract_text(getattr(reply, "content", "")).lower()
             binary_score = "yes" if "yes" in content else "no"
@@ -1662,7 +1838,7 @@ class PageOracleBackend:
                 self.log(f"[Rewrite] with_structured_output недоступен, fallback ручного парсинга: {e}")
                 self.model_supports_structured_output = False
 
-        if not decision:
+        if not isinstance(decision, RewriteDecision):
             reply = model.invoke([HumanMessage(content=REWRITE_PROMPT.format(question=question, query=query))])
             content = _extract_text(getattr(reply, "content", "")).strip()
             rewritten_query = content

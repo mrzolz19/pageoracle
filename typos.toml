@@ -5,3 +5,7 @@ extend-exclude = [
     "*.lock",
     "skills-lock.json",
 ]
+
+[default.extend-words]
+certifi = "certifi"
+

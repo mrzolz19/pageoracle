@@ -47,6 +47,10 @@ def load_settings() -> dict[str, Any]:
         "llm_api_key": "",
         "embedding_api_key": "",
         "yc_folder_id": "",
+        "custom_providers": [],
+        "llm_endpoint": "",
+        "embedding_endpoint": "",
+        "embedding_same_as_llm": False,
         "temperature": 0.2,
         "max_tokens": 4096,
         "top_p": 0.9,
@@ -59,6 +63,9 @@ def load_settings() -> dict[str, Any]:
             if legacy_api_key:
                 payload.setdefault("llm_api_key", legacy_api_key)
                 payload.setdefault("embedding_api_key", legacy_api_key)
+            legacy_endpoint = str(payload.get("endpoint", "")).strip()
+            if legacy_endpoint:
+                payload.setdefault("llm_endpoint", legacy_endpoint)
             defaults.update(payload)
         except Exception:
             pass
@@ -218,18 +225,69 @@ def _validate_settings(payload: dict[str, Any]) -> dict[str, Any]:
     llm_api_key = str(payload.get("llm_api_key", "")).strip()
     embedding_api_key = str(payload.get("embedding_api_key", "")).strip()
     yc_folder_id = str(payload.get("yc_folder_id", "")).strip()
+    llm_endpoint = str(payload.get("llm_endpoint", "")).strip()
+    embedding_endpoint = str(payload.get("embedding_endpoint", "")).strip()
+    embedding_same_as_llm = bool(payload.get("embedding_same_as_llm", False))
 
-    if provider not in PROVIDERS:
+    raw_custom_providers = payload.get("custom_providers") or []
+    custom_providers: list[dict[str, Any]] = []
+    if isinstance(raw_custom_providers, list):
+        for item in raw_custom_providers:
+            if isinstance(item, dict):
+                p_name = str(item.get("name", "")).strip()
+                p_endpoint = str(item.get("endpoint", "")).strip()
+                p_key = str(item.get("api_key", "")).strip()
+                p_model = str(item.get("model", "")).strip()
+                p_emb = str(item.get("embedding_model", "")).strip()
+                if p_name:
+                    custom_providers.append(
+                        {
+                            "name": p_name,
+                            "endpoint": p_endpoint,
+                            "api_key": p_key,
+                            "model": p_model,
+                            "embedding_model": p_emb,
+                        }
+                    )
+
+    custom_provider_names = {p["name"] for p in custom_providers}
+    matching_custom = next((p for p in custom_providers if p["name"] == provider), None)
+    is_custom = (
+        (provider == "Custom")
+        or (provider in custom_provider_names)
+        or (provider not in PROVIDERS and bool(llm_endpoint))
+    )
+
+    if not provider:
+        raise ValueError("Укажите провайдера.")
+
+    if not is_custom and provider not in PROVIDERS:
         raise ValueError("Неизвестный провайдер.")
 
-    models = PROVIDERS[provider].get("models", [])
-    if not isinstance(models, list) or model not in models:
-        raise ValueError("Выберите корректную модель для провайдера.")
+    if matching_custom:
+        if not llm_endpoint and matching_custom.get("endpoint"):
+            llm_endpoint = matching_custom["endpoint"]
+        if not model and matching_custom.get("model"):
+            model = matching_custom["model"]
+        if not llm_api_key and matching_custom.get("api_key"):
+            llm_api_key = matching_custom["api_key"]
+        if not embedding_model and matching_custom.get("embedding_model"):
+            embedding_model = matching_custom["embedding_model"]
 
-    if embedding_model not in EMBEDDING_OPTIONS:
-        raise ValueError("Выберите корректную embedding-модель.")
+    if not model:
+        raise ValueError("Введите название модели.")
 
-    if not llm_api_key:
+    if not embedding_model:
+        raise ValueError("Введите название embedding-модели.")
+
+    if is_custom and not llm_endpoint:
+        raise ValueError("Укажите Endpoint для кастомного провайдера.")
+
+    if embedding_same_as_llm:
+        embedding_endpoint = llm_endpoint
+        embedding_api_key = llm_api_key
+
+    if not is_custom and not llm_api_key:
         raise ValueError("Введите API ключ LLM.")
 
     if embedding_model == "nvidia/llama-nemotron-embed-vl-1b-v2:free" and not embedding_api_key:
@@ -246,6 +304,10 @@ def _validate_settings(payload: dict[str, Any]) -> dict[str, Any]:
         "llm_api_key": llm_api_key,
         "embedding_api_key": embedding_api_key,
         "yc_folder_id": yc_folder_id,
+        "custom_providers": custom_providers,
+        "llm_endpoint": llm_endpoint,
+        "embedding_endpoint": embedding_endpoint,
+        "embedding_same_as_llm": embedding_same_as_llm,
         "temperature": _parse_float(payload, "temperature", "Temperature", 0.0, 2.0),
         "max_tokens": _parse_int(payload, "max_tokens", "Max Tokens", 1),
         "top_p": _parse_float(payload, "top_p", "Top P", 0.0, 1.0),
@@ -270,6 +332,9 @@ def initialize_backend() -> None:
                 max_tokens=int(state.settings.get("max_tokens", 4096)),
                 top_p=float(state.settings.get("top_p", 0.9)),
                 score_threshold=float(state.settings.get("score_threshold", 0.6)),
+                endpoint=state.settings.get("llm_endpoint", ""),
+                embedding_endpoint=state.settings.get("embedding_endpoint", ""),
+                custom_providers=state.settings.get("custom_providers", []),
             )
 
             with state.state_lock:
@@ -429,12 +494,18 @@ def api_settings():
                 temperature=float(validated.get("temperature", 0.2)),
                 max_tokens=int(validated.get("max_tokens", 4096)),
                 top_p=float(validated.get("top_p", 0.9)),
+                endpoint=validated.get("llm_endpoint", ""),
+                custom_providers=validated.get("custom_providers", []),
             )
 
-            if ok and validated["embedding_model"] != state.backend.embedding_model_name:
+            embedding_changed = validated["embedding_model"] != state.backend.embedding_model_name or validated.get(
+                "embedding_endpoint", ""
+            ) != getattr(state.backend, "embedding_endpoint", "")
+            if ok and embedding_changed:
                 ok = state.backend.set_embeddings(
                     validated["embedding_model"],
                     validated.get("embedding_api_key", ""),
+                    endpoint=validated.get("embedding_endpoint", ""),
                 )
 
             if ok:
