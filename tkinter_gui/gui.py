@@ -38,9 +38,22 @@ from tkinter import (
 
 from main import PROVIDERS, PageOracleBackend
 
+
+def get_base_dir() -> Path:
+    """Возвращает базовую директорию приложения с поддержкой PyInstaller (sys.frozen)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def get_settings_file() -> Path:
+    """Возвращает путь к settings.json относительно базовой директории."""
+    return get_base_dir() / "settings.json"
+
+
 # Tkinter-Designer style constants
-OUTPUT_PATH = Path(__file__).parent
-SETTINGS_FILE = OUTPUT_PATH / "settings.json"
+OUTPUT_PATH = get_base_dir()
+SETTINGS_FILE = get_settings_file()
 
 
 # Color tokens from Figma mockups
@@ -84,8 +97,9 @@ class TextRedirector(io.TextIOBase):
             self.original.flush()
 
 
-def load_settings() -> dict:
+def load_settings(settings_file: Path | None = None) -> dict:
     """Загружает настройки UI/модели и мягко мигрирует legacy api_key и endpoint."""
+    target_file = settings_file or get_settings_file()
     defaults = {
         "provider": "YandexGPT",
         "model": "yandexgpt-5.1/latest",
@@ -102,9 +116,9 @@ def load_settings() -> dict:
         "top_p": 0.9,
         "score_threshold": 0.6,
     }
-    if SETTINGS_FILE.exists():
+    if target_file.exists():
         try:
-            with open(SETTINGS_FILE, encoding="utf-8") as file:
+            with open(target_file, encoding="utf-8") as file:
                 payload = json.load(file)
             legacy_api_key = str(payload.get("api_key", "")).strip()
             if legacy_api_key:
@@ -119,9 +133,10 @@ def load_settings() -> dict:
     return defaults
 
 
-def save_settings(data: dict) -> None:
+def save_settings(data: dict, settings_file: Path | None = None) -> None:
     """Сохраняет настройки приложения в settings.json."""
-    with open(SETTINGS_FILE, "w", encoding="utf-8") as file:
+    target_file = settings_file or get_settings_file()
+    with open(target_file, "w", encoding="utf-8") as file:
         json.dump(data, file, ensure_ascii=False, indent=2)
 
 
@@ -883,7 +898,7 @@ class PageOracleApp:
         self.is_initialized = False
         self.is_busy = False
         self.mode = "auto"
-        self.history_file = OUTPUT_PATH / "chat_history.json"
+        self.history_file = get_base_dir() / "chat_history.json"
 
         self.window = Tk()
         self.window.title("PageOracle - AI Book Reader")

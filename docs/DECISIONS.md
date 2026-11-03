@@ -23,6 +23,7 @@ Before proposing plans or changes, consult the Table of Contents and relevant do
 | D-004 | 2026-11-03 | data | Exclude dependency manifests and fallback to adjacent books directory | Active |
 | D-005 | 2026-11-04 | architecture | Custom OpenAI-compatible providers, free-form models, and decoupled embeddings | Active |
 | D-006 | 2026-11-04 | data | Security gitignore for runtime settings and resilient book encoding fallback | Active |
+| D-007 | 2026-11-04 | architecture | Standalone Windows distribution and dual CPU/CUDA release matrix | Active |
 
 ---
 
@@ -86,6 +87,16 @@ Before proposing plans or changes, consult the Table of Contents and relevant do
 **Why:** Prevents secret leakage to source control, ensures quality gates pass cleanly without unmonitored tool artifacts, eliminates app startup crashes on corrupted book files, and avoids high CUDA commit spikes during tests.
 **Why it should work:** Gitignore blocks tracking of credential files; graceful exception handling prevents an unreadable file from breaking full library ingestion; lazy import decouples testing from PyTorch CUDA initialization.
 **Affects:** `.gitignore`, `.rumdl.toml`, `web_gui_pageoracle/main.py`, `tkinter_gui/main.py`, `tests/test_book_indexing.py`.
+**Status:** Active
+
+## D-007. Standalone Windows Distribution and Dual CPU/CUDA Release Matrix (2026-11-04)
+
+**Question:** How to package and distribute PageOracle for end users without requiring a local Python development environment or GPU toolchain.
+**Options:** Single monolithic `--onefile` executable vs `--onedir` directory distribution in a `.zip` archive; single CPU-only build vs dual CPU/CUDA matrix.
+**Chosen:** Root `pageoracle.spec` with `--onedir` collection, runtime path anchoring via `get_base_dir()` (`sys.frozen`), and GitHub Actions release matrix producing `PageOracle-windows-x64-cpu.zip` and `PageOracle-windows-x64-cu128.zip`.
+**Why:** User requested a portable Windows `.exe` release that opens immediately with persistent local settings and books, supporting both lightweight CPU PCs and NVIDIA RTX GPU acceleration.
+**Why it should work:** `--onedir` avoids multi-gigabyte decompression overhead on launch; `sys.frozen` runtime anchoring keeps books and settings persistent adjacent to the executable; matrix CI separation prevents runner disk exhaustion.
+**Affects:** `pageoracle.spec`, `tkinter_gui/gui.py`, `tkinter_gui/main.py`, `web_gui_pageoracle/main.py`, `.github/workflows/release.yml`, `settings.template.json`, `tests/test_desktop_distribution.py`, `README.md`.
 **Status:** Active
 
 ---

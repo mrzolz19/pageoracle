@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import threading
 import time
 import urllib.error
@@ -725,14 +726,44 @@ class HybridRerankerRetriever(BaseRetriever):
         return self.reranker.rerank(query, merged, self.k)
 
 
+def get_base_dir() -> Path:
+    """Возвращает базовую директорию приложения с поддержкой PyInstaller (sys.frozen)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
 class PageOracleBackend:
     """Основной оркестратор: загрузка книг, индекс, модель, граф и история."""
 
     EXCLUDED_BOOK_FILES = EXCLUDED_BOOK_FILES
 
-    def __init__(self, books_dir=".", persist_dir="./chroma_intro_db", log_callback=None):
-        self.books_dir = books_dir
-        self.persist_dir = persist_dir
+    def __init__(
+        self,
+        books_dir: str | None = None,
+        persist_dir: str | None = None,
+        log_callback=None,
+    ):
+        base_dir = get_base_dir()
+        if getattr(sys, "frozen", False):
+            if books_dir is None or books_dir == ".":
+                candidate_books = base_dir / "books"
+                self.books_dir = str(candidate_books if candidate_books.is_dir() else base_dir)
+            else:
+                p = Path(books_dir)
+                self.books_dir = str(base_dir / p if not p.is_absolute() else p)
+
+            if persist_dir is None or persist_dir == "./chroma_intro_db":
+                self.persist_dir = str(base_dir / "chroma_intro_db")
+            else:
+                p = Path(persist_dir)
+                self.persist_dir = str(base_dir / p if not p.is_absolute() else p)
+
+            self.history_path = base_dir / "chat_history.json"
+        else:
+            self.books_dir = books_dir if books_dir is not None else "."
+            self.persist_dir = persist_dir if persist_dir is not None else "./chroma_intro_db"
+            self.history_path = Path("chat_history.json")
         self.log = log_callback or print
         self.vectorstore = None
         self.mmr_retriever = None
@@ -754,7 +785,6 @@ class PageOracleBackend:
         self.score_threshold = 0.6
         self.history: list[dict[str, str]] = []
         self.history_max_messages = 20
-        self.history_path = Path("chat_history.json")
         self.graph_app = None
         self.last_route_decision = "unknown"
         self.last_manual_override = False
@@ -1019,7 +1049,7 @@ class PageOracleBackend:
         ]
 
         if not txt_files:
-            fallback_dir = Path(__file__).resolve().parent / "books"
+            fallback_dir = get_base_dir() / "books"
             if fallback_dir.is_dir() and fallback_dir.resolve() != target_path.resolve():
                 fallback_files = [
                     f

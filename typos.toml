@@ -8,4 +8,5 @@ extend-exclude = [
 
 [default.extend-words]
 certifi = "certifi"
+datas = "datas"
 

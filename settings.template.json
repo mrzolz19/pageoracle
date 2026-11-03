@@ -1,0 +1,16 @@
+{
+  "provider": "DeepSeek",
+  "model": "deepseek-chat",
+  "embedding_model": "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+  "llm_api_key": "",
+  "embedding_api_key": "",
+  "yc_folder_id": "",
+  "custom_providers": [],
+  "llm_endpoint": "",
+  "embedding_endpoint": "",
+  "embedding_same_as_llm": false,
+  "temperature": 0.2,
+  "max_tokens": 4096,
+  "top_p": 0.9,
+  "score_threshold": 0.6
+}
