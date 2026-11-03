@@ -1,0 +1,12 @@
+# Checkpoints (local external memory, do not commit)
+docs/CHECKPOINT.md
+
+# Python cache & environments
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# Vector store database
+chroma_intro_db/
