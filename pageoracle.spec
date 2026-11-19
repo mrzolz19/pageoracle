@@ -1,6 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+    copy_metadata,
+)
 
 datas = []
 datas += collect_data_files("chromadb")
@@ -12,6 +17,15 @@ datas += copy_metadata("torch")
 datas += copy_metadata("sentence_transformers")
 datas += copy_metadata("huggingface_hub")
 datas += copy_metadata("transformers")
+
+binaries = []
+# torchvision >= 0.29 ships its C extension as `_C_stable.pyd` and loads it via
+# torch.ops.load_library, which PyInstaller cannot trace. The bundled hook still
+# lists the removed `torchvision._C` hidden import, so the extension is skipped and
+# `torchvision::nms` never gets registered. transformers.modeling_utils imports
+# torchvision.transforms, which then fails with a masked "Could not import module
+# 'PreTrainedModel'". Collect the package binaries explicitly.
+binaries += collect_dynamic_libs("torchvision", search_patterns=["*.pyd", "*.dll"])
 
 hiddenimports = []
 hiddenimports += collect_submodules("chromadb")
@@ -49,7 +63,7 @@ excludes = [
 a = Analysis(
     ["tkinter_gui/gui.py"],
     pathex=["tkinter_gui"],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

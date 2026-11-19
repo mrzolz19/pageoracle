@@ -69,6 +69,17 @@ jobs:
         run: |
           pyinstaller pageoracle.spec --noconfirm --clean
 
+      - name: Verify bundled torchvision extension
+        shell: pwsh
+        run: |
+          # torchvision >= 0.29 loads `_C_stable` via torch.ops.load_library, which
+          # PyInstaller cannot trace. Without these binaries `torchvision::nms` is not
+          # registered and transformers fails to import PreTrainedModel at runtime.
+          foreach ($lib in @("_C_stable.pyd", "image_stable.pyd")) {
+            $path = Join-Path "dist/PageOracle/_internal/torchvision" $lib
+            if (-not (Test-Path $path)) { throw "Missing torchvision binary: $path" }
+          }
+
       - name: Bundle starter books and settings template
         shell: pwsh
         run: |
@@ -100,11 +111,13 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Download all artifacts
+      - name: Download CPU artifact
         uses: actions/download-artifact@cc203385981b70ca67e1cc392babf9cc229d5806 # v4.1.9
         with:
+          # GitHub caps release assets at 2 GiB, so the ~2.3 GB CUDA build cannot be
+          # published. It stays available as a workflow artifact instead.
+          name: PageOracle-windows-x64-cpu
           path: release-assets
-          merge-multiple: true
 
       - name: Determine Tag
         id: vars

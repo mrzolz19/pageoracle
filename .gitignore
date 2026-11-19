@@ -12,6 +12,9 @@ venv/
 build/
 dist/
 *.egg-info/
+# Extracted standalone builds used for local runtime checks
+PageOracle-windows-x64-cpu/
+PageOracle-windows-x64-cu128/
 
 # Vector store database
 chroma_intro_db/

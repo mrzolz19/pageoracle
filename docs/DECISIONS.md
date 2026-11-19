@@ -25,6 +25,7 @@ Before proposing plans or changes, consult the Table of Contents and relevant do
 | D-006 | 2026-11-04 | data | Security gitignore for runtime settings and resilient book encoding fallback | Active |
 | D-007 | 2026-11-04 | architecture | Standalone Windows distribution and dual CPU/CUDA release matrix | Active |
 | D-008 | 2026-11-04 | workflow | README.md visual redesign, clickable stack badges, hackathon context, and callouts | Active |
+| D-009 | 2026-11-19 | architecture | Collect torchvision C extension explicitly and publish CPU build only | Active |
 
 ---
 
@@ -108,6 +109,16 @@ Before proposing plans or changes, consult the Table of Contents and relevant do
 **Why:** User requested clickable badges, clear hackathon milestone context for Technostrelka 2026 with the qualifying commit hash, current active polishing status, and rich callout styling.
 **Why it should work:** Clickable badges provide immediate access to upstream docs; GFM alerts draw visual attention to critical setup steps; `<details>` tags prevent image overload while keeping samples readable.
 **Affects:** `README.md`.
+**Status:** Active
+
+## D-009. Frozen torchvision Extension and CPU-Only Release Assets (2026-11-19)
+
+**Question:** Why does the frozen build fail to import `PreTrainedModel`, and how should oversized release assets be handled.
+**Options:** Trust the bundled PyInstaller torchvision hook; exclude torchvision from the bundle; collect `torchvision` binaries explicitly; publish the ~2.3 GB CUDA zip as a release asset or keep it as a workflow artifact.
+**Chosen:** `pageoracle.spec` collects `torchvision` dynamic libraries with `search_patterns=["*.pyd", "*.dll"]`; the release job publishes only the CPU zip and the CUDA build stays an Actions artifact.
+**Why:** `torchvision >= 0.29` loads its C extension as `_C_stable.pyd` via `torch.ops.load_library`, so PyInstaller's hook (`hiddenimports=["torchvision._C"]`) no longer sees it; GitHub rejects release assets of 2 GiB or more.
+**Why it should work:** Reproduction against the extracted bundle showed `RuntimeError: operator torchvision::nms does not exist` inside `transformers.image_utils`, surfaced as a masked `ModuleNotFoundError`; bundling the extension registers the operator, and a build-time check fails the release job if the binaries are missing.
+**Affects:** `pageoracle.spec`, `.github/workflows/release.yml`, `tests/test_desktop_distribution.py`, `.gitignore`, `README.md`.
 **Status:** Active
 
 ---

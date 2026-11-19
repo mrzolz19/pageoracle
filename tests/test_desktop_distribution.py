@@ -135,7 +135,14 @@ class TestDesktopDistribution(unittest.TestCase):
             "sentence_transformers",
         ]:
             self.assertIn(f'"{required}"', content)
+        # torchvision >= 0.29 loads its `_C_stable` extension via torch.ops.load_library,
+        # so PyInstaller cannot discover it and the bundled hook only knows the removed
+        # `torchvision._C` module. The spec must collect the package binaries explicitly,
+        # otherwise `torchvision::nms` is unregistered and transformers fails to import
+        # PreTrainedModel inside the frozen bundle.
+        self.assertIn('collect_dynamic_libs("torchvision", search_patterns=["*.pyd", "*.dll"])', content)
 
+    @patch("PyInstaller.utils.hooks.collect_dynamic_libs", return_value=[("mock_lib", "torchvision")])
     @patch("PyInstaller.utils.hooks.copy_metadata", return_value=[("mock_meta", ".")])
     @patch("PyInstaller.utils.hooks.collect_submodules", return_value=["mock_sub"])
     @patch("PyInstaller.utils.hooks.collect_data_files", return_value=[("mock_data", ".")])
@@ -144,6 +151,7 @@ class TestDesktopDistribution(unittest.TestCase):
         mock_collect_data: MagicMock,
         mock_collect_sub: MagicMock,
         mock_copy_meta: MagicMock,
+        mock_collect_libs: MagicMock,
     ) -> None:
         """
         GIVEN pageoracle.spec
@@ -175,6 +183,8 @@ class TestDesktopDistribution(unittest.TestCase):
         # Excluding it from the bundle makes the frozen reranker fail with
         # ModuleNotFoundError: No module named 'unittest'.
         self.assertNotIn("unittest", kwargs.get("excludes", []))
+        # torchvision C extension must reach the bundle as a binary.
+        self.assertIn(("mock_lib", "torchvision"), kwargs.get("binaries", []))
 
         mock_collect.assert_called_once()
         _, coll_kwargs = mock_collect.call_args
