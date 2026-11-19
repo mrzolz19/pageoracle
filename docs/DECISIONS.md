@@ -24,6 +24,7 @@ Before proposing plans or changes, consult the Table of Contents and relevant do
 | D-005 | 2026-11-04 | architecture | Custom OpenAI-compatible providers, free-form models, and decoupled embeddings | Active |
 | D-006 | 2026-11-04 | data | Security gitignore for runtime settings and resilient book encoding fallback | Active |
 | D-007 | 2026-11-04 | architecture | Standalone Windows distribution and dual CPU/CUDA release matrix | Active |
+| D-008 | 2026-11-04 | workflow | README.md visual redesign, clickable stack badges, hackathon context, and callouts | Active |
 
 ---
 
@@ -97,6 +98,16 @@ Before proposing plans or changes, consult the Table of Contents and relevant do
 **Why:** User requested a portable Windows `.exe` release that opens immediately with persistent local settings and books, supporting both lightweight CPU PCs and NVIDIA RTX GPU acceleration.
 **Why it should work:** `--onedir` avoids multi-gigabyte decompression overhead on launch; `sys.frozen` runtime anchoring keeps books and settings persistent adjacent to the executable; matrix CI separation prevents runner disk exhaustion.
 **Affects:** `pageoracle.spec`, `tkinter_gui/gui.py`, `tkinter_gui/main.py`, `web_gui_pageoracle/main.py`, `.github/workflows/release.yml`, `settings.template.json`, `tests/test_desktop_distribution.py`, `README.md`.
+**Status:** Active
+
+## D-008. README.md Redesign, Clickable Badges, and Hackathon Milestone (2026-11-04)
+
+**Question:** How to present project capabilities, technology stack, hackathon origins, and documentation in a visually compelling, interactive format.
+**Options:** Plain text lists with raw badge links vs categorized for-the-badge badges with clickable targets, standard GitHub alerts, and expandable details blocks.
+**Chosen:** Categorized clickable for-the-badge shields linking to official documentation, prominent GFM alert callouts (`[!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`), hackathon finalist milestone with jury commit anchor `5cadd17`, and collapsible sample dialogues.
+**Why:** User requested clickable badges, clear hackathon milestone context for Technostrelka 2026 with the qualifying commit hash, current active polishing status, and rich callout styling.
+**Why it should work:** Clickable badges provide immediate access to upstream docs; GFM alerts draw visual attention to critical setup steps; `<details>` tags prevent image overload while keeping samples readable.
+**Affects:** `README.md`.
 **Status:** Active
 
 ---
