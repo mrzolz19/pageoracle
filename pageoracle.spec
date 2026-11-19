@@ -38,7 +38,9 @@ excludes = [
     "jinja2",
     "werkzeug",
     "pytest",
-    "unittest",
+    # NOTE: never exclude "unittest": torch.utils._config_module imports it
+    # (unittest.mock) at import time, so the frozen reranker (sentence_transformers
+    # -> torch) fails with "No module named 'unittest'" when it is missing.
     "IPython",
     "notebook",
     "matplotlib",

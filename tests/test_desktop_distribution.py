@@ -171,6 +171,10 @@ class TestDesktopDistribution(unittest.TestCase):
         args, kwargs = mock_analysis.call_args
         self.assertEqual(args[0], ["tkinter_gui/gui.py"])
         self.assertIn("tkinter_gui", kwargs.get("pathex", []))
+        # torch.utils._config_module does `import unittest` at import time.
+        # Excluding it from the bundle makes the frozen reranker fail with
+        # ModuleNotFoundError: No module named 'unittest'.
+        self.assertNotIn("unittest", kwargs.get("excludes", []))
 
         mock_collect.assert_called_once()
         _, coll_kwargs = mock_collect.call_args
