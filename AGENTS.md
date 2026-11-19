@@ -141,12 +141,16 @@ This is not a license for rudeness or arguing for the sake of arguing. It is a r
 ## Decision Log (`docs/DECISIONS.md`)
 
 - Record every significant decision (architecture, technology choices, data models, user behavior, rejected alternatives) in the decision log immediately after the user makes it.
+
 - Structure of the file — three sections:
   1. **Table of Contents** — table, one row per decision: `| D-<number> | <date> | <domain> | <short title> | <status> |`. Domains are a short fixed list established when creating the log (e.g.: architecture, data, rag-pipeline, gui, workflow).
   2. **Decisions** — active records following the format below.
   3. **Archive** — superseded records.
+
 - Add new decisions in two places simultaneously: a row in the table of contents and an entry under "Decisions".
+
 - Entry length: 4–6 lines, each field in 1–2 sentences without replaying the chat transcript.
+
 - Entry format:
 
   ```markdown
@@ -161,9 +165,13 @@ This is not a license for rudeness or arguing for the sake of arguing. It is a r
   ```
 
 - Never delete or rewrite old entries. If a decision is reconsidered: create a new entry, mark the old one as "Superseded by D-<number>", move the old entry to "Archive" unchanged (except for status), and update its status in the table of contents.
+
 - Before planning, designing, or refactoring an existing part of the system, read the table of contents in its entirety, and read detailed entries only for the affected domain and referenced decisions. Do not read the entire file. Ground choices in active decisions. If a new plan contradicts an entry, point it out explicitly and ask if the decision should be revisited.
+
 - This rule applies inside skills (brainstorming, writing-plans): the log must be consulted before proposing options.
+
 - If a decision represents a rule that must govern every session (e.g., "always keep web_gui and tkinter_gui synchronized"), record it in the agent rules as well. The log stores why it was decided; rules store what to do.
+
 - When active decisions exceed 100 or multiple collaborators join, propose migrating to a `docs/decisions/` directory with one file per decision and an index file.
 
 ## Work Summary
