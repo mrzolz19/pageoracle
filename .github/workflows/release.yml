@@ -72,13 +72,19 @@ jobs:
       - name: Verify bundled torchvision extension
         shell: pwsh
         run: |
-          # torchvision >= 0.29 loads `_C_stable` via torch.ops.load_library, which
-          # PyInstaller cannot trace. Without these binaries `torchvision::nms` is not
-          # registered and transformers fails to import PreTrainedModel at runtime.
-          foreach ($lib in @("_C_stable.pyd", "image_stable.pyd")) {
-            $path = Join-Path "dist/PageOracle/_internal/torchvision" $lib
-            if (-not (Test-Path $path)) { throw "Missing torchvision binary: $path" }
+          # torchvision loads its C extension via torch.ops.load_library, which
+          # PyInstaller cannot trace. The file name depends on the version:
+          # 0.26 ships _C.pyd/image.pyd, 0.29 ships _C_stable.pyd/image_stable.pyd.
+          # Without it `torchvision::nms` is not registered and transformers fails
+          # to import PreTrainedModel at runtime.
+          $pyd = Get-ChildItem "dist/PageOracle/_internal/torchvision" -Filter "*.pyd" -File -ErrorAction SilentlyContinue
+          if (-not ($pyd | Where-Object { $_.Name -like "_C*.pyd" })) {
+            throw "Missing torchvision C extension in the bundle"
           }
+          if (-not ($pyd | Where-Object { $_.Name -like "image*.pyd" })) {
+            throw "Missing torchvision image extension in the bundle"
+          }
+          $pyd | ForEach-Object { "bundled: $($_.Name)" }
 
       - name: Bundle starter books and settings template
         shell: pwsh
